@@ -1,0 +1,30 @@
+# MATLAB data files (can be large)
+*.mat
+
+# MATLAB autosave
+*.asv
+*.m~
+
+# Figures (optional - remove line if you want to track figures)
+# 2d/figures/*.png
+# 2d/figures/*.gif
+# 3d/figures/*.png
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*~
+*.tmp
