@@ -1,4 +1,4 @@
-function [rho,m,outs] = ot1d_admm(rho0,rho1,opts)
+function [rho,mx,outs] = ot1d_admm(rho0,rho1,opts)
     
     % Grid Parameters
     nt = opts.nt;
@@ -10,34 +10,70 @@ function [rho,m,outs] = ot1d_admm(rho0,rho1,opts)
 
     % More parameters
     gamma = opts.gamma; % ADMM Time Step
-    tol = opts.tol;
-    tau = opts.tau; % DR timestep (inner loop)
+    tau = opts.tau;     % Second Time Step for PDHG
+    % tol = opts.tol;
     maxIter = opts.maxIter;
-    sub_maxit = opts.sub_maxit;
     residual_diff = zeros(maxIter,1);
     residual_analytical  = zeros(maxIter,1);
 
     % BC
     dirichlet_bc_space  = zeros(nt,1);
+    
+    t = linspace(0,1,nt+1)';
+    tt = (t(2:end)+t(1:end-1))/2;
+    % Initial Guess (Linear Interpolation btwn rho0 & rho1)
+    % Primal Vars
+    rho = (1-tt).*rho0 + tt.*rho1; 
+    mx  = ones(nt,nx);
+    % rho_new = rho; mx_new  = ones(nt,nx);
 
-    rho_new = ones(ntm,nx); rho = ones(ntm,nx);
-    mx_new  = ones(nt,nxm); mx  = ones(nt,nxm);
-    rho_tilde = interp_t_at_phi(rho,rho0,rho1);
-    mx_tilde = interp_x_at_phi(rho,dirichlet_bc_space,dirichlet_bc_space);
-    delta_rho = zeros(nt,nx); delta_mx = zeros(nt,nx);
+    % Dual Vars
+    rho_tilde = interp_t_at_rho(rho);
+    bx = interp_x_at_m(mx);
+    
+    % Extra Gradient Step
+    delta_rho = zeros(size(rho_tilde)); delta_mx = zeros(size(bx));
 
     % Eigenvalues for the Laplacian
-    lambda_x = (2*ones(1,nx) - 2*cos(pi*dx.*(0:nx-1)))/dx/dx;
-    lambda_t = (2*ones(nt,1) - 2*cos(pi*dt.*(0:nt-1)'))/dt/dt;
+    lambda_x = (2*ones(1,nx) - 2*cos(pi*dx.*(0:nxm)))/dx/dx;
+    lambda_t = (2*ones(nt,1) - 2*cos(pi*dt.*(0:ntm)'))/dt/dt;
     lambda_lap = lambda_x + lambda_t;
 
     for iter = 1:maxIter
 
+        % Set up for first Proximal Operator
+           
+        % A(rho,m) - (rho_tilde,b) - \delta/gamma
+        tmp_rho = interp_t_at_rho(rho) - rho_tilde - delta_rho./gamma;
+        tmp_mx  = interp_x_at_m(mx) - bx - delta_mx./gamma;
         
+        % (rho,m) - (gamma/tau)*A^T*[(tmp_rho,tmp,mx)]
+        tmp_rho = rho - (gamma/tau)*interp_t_at_phi(tmp_rho,rho0,rho1);
+        tmp_mx  = mx - (gamma/tau)*interp_x_at_phi(tmp_mx,dirichlet_bc_space,dirichlet_bc_space);
 
-    
+        % Proximal Step for the Kinetic Energy Term
+        sigma = 1/tau; % Just to make code cleaner
+        rho = solve_cubic(1,2*sigma-tmp_rho,sigma^2-2*sigma*tmp_rho,...
+                                -sigma*(sigma*tmp_rho + 0.5.*tmp_mx.^2));
+        mx = (rho.*tmp_mx)./(sigma+rho);
+
+        % Truncate negative rho's
+        neg_ind = (rho <= 1e-12);
+        rho(neg_ind) = 0.0;
+        mx(neg_ind) = 0.0;
+
+        % Set up the second Proximal operator
+        tmp_rho = interp_t_at_rho(rho) - delta_rho./gamma;
+        tmp_mx = interp_x_at_m(mx) - delta_mx./gamma;
+
+        [rho_tilde, bx] = proj_div_free(tmp_rho, tmp_mx);
+
+        % Extra-Gradient step
+        delta_rho = delta_rho - gamma*(interp_t_at_rho(rho) - rho_tilde);
+        delta_mx  = delta_mx  - gamma*(interp_x_at_m(mx) - bx);
     end
-
+    
+    outs = 1;
 
 
     %% Helper Functions

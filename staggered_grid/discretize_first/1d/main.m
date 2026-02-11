@@ -4,18 +4,18 @@ clear
 % % Grid in Space and Time 
 
 % (Staggered)
-nt = 4; ntp = nt+1; ntm = nt-1;
+nt = 64; ntp = nt+1; ntm = nt-1;
 dt = 1/nt;
 t = linspace(0,1,ntp)';
-nx = 4;
+nx = 128;
 nxp = nx+1; nxm = nx-1;
 dx = 1/nx;
 x = linspace(0,1,nxp);
-xx = (x(1:end-1)+x(2:end))/2;
+xx = (x(2:end) + x(1:end-1))/2;
 
 % Step Size
-gamma = 0.1;
-tau   = 0.1;
+gamma = 10;
+tau   = gamma/ 0.99;   % Constraint for PDHG (Linearized ADMM)
 maxIter = 1000;
 
 % Time Boundary Conditions for rho
@@ -35,14 +35,42 @@ rho1 = Normal(xx,meanvalue1,sigma1);
 % rho0 = Normal(x,meanvalue0a,sigma0) + Normal(x,meanvalue0b,sigma0) + 0.1;
 % rho1 = Normal(x,meanvalue1,sigma1)+0.1;
 
-opts.tol = 1e-10;
+% opts.tol = 1e-10;
 opts.nt = nt;
 opts.nx = nx;
 opts.maxIter = maxIter;
-opts.sub_maxit = 5;
 opts.gamma = gamma;
 opts.tau = tau;
 % opts.rho_analytical = rho_analytical;
 % opts.mx_analytical = mx_analytical;
 
 [rho_admm, mx_admm, outs_admm] = ot1d_admm(rho0,rho1,opts);
+
+%% Post Process
+
+% Create a figure
+figure;
+h = plot(xx, rho0, 'LineWidth', 2);
+ylim([0, max(rho_admm(:))*1.1]);  % set y-limits so they don't jump
+xlabel('x'); ylabel('\rho');
+title('Density transport');
+
+% Optional: create a video writer
+v = VideoWriter('rho_transport.mp4', 'MPEG-4');
+v.FrameRate = 1;  % adjust as needed
+open(v);
+
+for i = 1:nt
+    set(h, 'YData', rho_admm(i,:));  % update plot
+    title(sprintf('Density transport, t = %d/%d', i, nt));
+    drawnow;
+    
+    % write frame to video
+    frame = getframe(gcf);
+    writeVideo(v, frame);
+    
+    % optional: pause for visualization without saving
+    % pause(0.05)
+end
+
+close(v);
