@@ -12,8 +12,8 @@ case_name = "gaussian_";
 
 % Grid parameters (should match main_simple.m)
 tau = 0.1;
-nt = 127;
-nx = 255;
+nt = 63;
+nx = 127;
 ny = nx;
 
 grid_name = sprintf('tau%0.2f_nt%d_nx%d_ny%d', tau, nt, nx, ny);

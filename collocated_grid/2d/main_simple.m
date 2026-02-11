@@ -15,7 +15,7 @@ ntp = nt+1;
 dt = 1/ntp;
 % t = linspace(0,1-dt,ntp);
 % t = t';
-maxIter = 10000;
+maxIter = 20000;
 
 
 % nx = nt;
@@ -25,7 +25,7 @@ dx = 1/nxp;
 x = linspace(0,1-dx,nxp); 
 x = x';
 
-% ny = 255;
+% ny = 127;
 ny = nx;
 nyp = ny+1;
 dy = 1/nyp;
