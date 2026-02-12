@@ -3,9 +3,9 @@
 % 2D
 
 clear
-post_process = false;
+post_process = true;
 tau = 0.1;
-GPUcomputing = false;  
+GPUcomputing = true;  
 gpu_device = 1;
 folder = "./data/";
 case_name = "gaussian_";
@@ -15,7 +15,7 @@ ntp = nt+1;
 dt = 1/ntp;
 % t = linspace(0,1-dt,ntp);
 % t = t';
-maxIter = 20000;
+maxIter = 10000;
 
 
 % nx = nt;
@@ -41,10 +41,10 @@ rho0((x-0.25).^2 + (y-0.25).^2 < 0.01) = 1;
 rho1((x-0.75).^2 + (y-0.75).^2 < 0.01) = 1;
 
 % Quadrature Vector
-% rho0_mass = sum(rho0,'all')*dx*dy*dt;
-% rho1_mass = sum(rho1,'all')*dx*dy*dt;
 rho0_mass = sum(rho0,'all')*dx*dy;
 rho1_mass = sum(rho1,'all')*dx*dy;
+%rho0 = rho0/rho0_mass;
+%rho1 = rho1/rho1_mass;
 rho1  = rho1*(rho0_mass/rho1_mass);
 
 % mass_check = abs((rho0-rho1)*quadrature_x);
