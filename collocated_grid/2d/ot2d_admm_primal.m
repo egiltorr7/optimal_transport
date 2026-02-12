@@ -182,11 +182,10 @@ function [rho,mx,my,outs] = ot2d_admm_primal(rho0, rho1, opts)
         residual_numerical(iter) = sqrt(dt*dx*dy*(norm(drho_ref,'fro')^2 ...
             + norm(dmx_ref,'fro')^2 + norm(dmy_ref,'fro')^2));
 
-        if residual_diff(iter) < 1e-14
-            opts.maxIter = iter;
-            break
-
-        end
+        %if residual_diff(iter) < 1e-14
+        %    opts.maxIter = iter;
+        %    break
+        %end
         
         % update
         rho = rho_new;
