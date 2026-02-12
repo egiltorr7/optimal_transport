@@ -3,9 +3,9 @@
 % 2D
 
 clear
-post_process = true;
+post_process = false;
 tau = 0.1;
-GPUcomputing = true;  
+GPUcomputing = false;  
 gpu_device = 1;
 folder = "./data/";
 case_name = "gaussian_";

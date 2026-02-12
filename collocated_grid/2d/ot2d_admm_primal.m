@@ -33,11 +33,11 @@ function [rho,mx,my,outs] = ot2d_admm_primal(rho0, rho1, opts)
     t_vec = reshape((0:nt-1)' * dt, nt, 1, 1);  % Shape (nt, 1, 1)
     rho = (1 - t_vec) .* reshape(rho0, 1, nxp, nyp) + t_vec .* reshape(rho1, 1, nxp, nyp);
     rho_new = rho;
-    mx  = ones(ntp,nx,nyp); mx_new  = ones(ntp,nx,nyp);
-    my  = ones(ntp,nxp,ny); my_new  = ones(ntp,nxp,ny);
-    rho_tilde = ones(nt,nxp,nyp); a = ones(nt,nxp,nyp);
-    mx_tilde = ones(ntp,nx,nyp);  my_tilde = ones(ntp,nxp,ny);
-    bx = ones(ntp,nx,nyp); by = ones(ntp,nxp,ny);
+    mx  = zeros(ntp,nx,nyp); mx_new  = zeros(ntp,nx,nyp);
+    my  = zeros(ntp,nxp,ny); my_new  = zeros(ntp,nxp,ny);
+    rho_tilde = rho; a = ones(nt,nxp,nyp);
+    mx_tilde = zeros(ntp,nx,nyp);  my_tilde = zeros(ntp,nxp,ny);
+    bx = zeros(ntp,nx,nyp); by = zeros(ntp,nxp,ny);
     bx_interior = ones(nt,nx,ny); by_interior = ones(nt,nx,ny);
     b_interior_sqrd = ones(nt,nx,ny); a_interior = ones(nt,nx,ny);
 
