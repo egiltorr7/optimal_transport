@@ -7,7 +7,7 @@ clear
 nt = 63; ntp = nt+1; ntm = nt-1;
 dt = 1/nt;
 t = linspace(0,1,ntp)';
-nx = 256;
+nx = 127;
 nxp = nx+1; nxm = nx-1;
 dx = 1/nx;
 x = linspace(0,1,nxp);
@@ -16,7 +16,7 @@ xx = (x(2:end) + x(1:end-1))/2;
 % Step Size
 gamma = 10;
 tau   = gamma/ 0.99;   % Constraint for PDHG (Linearized ADMM)
-maxIter = 10000;
+maxIter = 100000;
 
 % Time Boundary Conditions for rho
 % Gaussian to Gaussian
@@ -77,6 +77,6 @@ for i = 1:nt
 end
 
 close(v);
-
+%%
 figure(2)
 semilogy(1:maxIter,outs_admm.residual_diff)

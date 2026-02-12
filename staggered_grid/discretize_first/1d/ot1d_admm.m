@@ -241,7 +241,9 @@ function [rho,mx,outs] = ot1d_admm(rho0,rho1,opts)
 
         phi_temp = invert_neg_laplacian(dmu_dt + dpsi_dx);
         rho_out = mu + deriv_t_at_rho(phi_temp);
-        m_out   = psi + deriv_x_at_m(phi_temp);       
+        m_out   = psi + deriv_x_at_m(phi_temp);  
+        % max(max(abs(deriv_t_at_phi(rho_out,rho0,rho1) + deriv_x_at_phi(m_out,dirichlet_bc,dirichlet_bc))))
+
     end
     
 
