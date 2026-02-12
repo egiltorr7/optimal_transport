@@ -23,9 +23,8 @@ function [rho,mx,outs] = ot1d_admm(rho0,rho1,opts)
     tt = (t(2:end)+t(1:end-1))/2;
     % Initial Guess (Linear Interpolation btwn rho0 & rho1)
     % Primal Vars
-    rho = (1-tt).*rho0 + tt.*rho1; 
-    mx  = ones(nt,nx);
-    % rho_new = rho; mx_new  = ones(nt,nx);
+    rho = (1-tt).*rho0 + tt.*rho1; rho_new = rho;
+    mx  = zeros(nt,nx); mx_new = mx;
 
     % Dual Vars
     rho_tilde = interp_t_at_rho(rho);
@@ -39,8 +38,19 @@ function [rho,mx,outs] = ot1d_admm(rho0,rho1,opts)
     lambda_t = (2*ones(nt,1) - 2*cos(pi*dt.*(0:ntm)'))/dt/dt;
     lambda_lap = lambda_x + lambda_t;
 
-    for iter = 1:maxIter
+    % Better guess for velocity
+    % potential = ones(nt,1)*(rho1 - rho0);
+    % potential = mirt_dctn(potential);
+    % potential = potential./lambda_x;
+    % potential(1) = 0.0;
+    % potential = mirt_idctn(potential);
+    % potential = interp_x_at_m(potential);
+    % mx = deriv_x_at_phi(potential,dirichlet_bc_space,dirichlet_bc_space);
+    % mx = rho.*mx;
+    
 
+    for iter = 1:maxIter
+        
         % Set up for first Proximal Operator
            
         % A(rho,m) - (rho_tilde,b) - \delta/gamma
@@ -53,27 +63,37 @@ function [rho,mx,outs] = ot1d_admm(rho0,rho1,opts)
 
         % Proximal Step for the Kinetic Energy Term
         sigma = 1/tau; % Just to make code cleaner
-        rho = solve_cubic(1,2*sigma-tmp_rho,sigma^2-2*sigma*tmp_rho,...
+        rho_new = solve_cubic(1,2*sigma-tmp_rho,sigma^2-2*sigma*tmp_rho,...
                                 -sigma*(sigma*tmp_rho + 0.5.*tmp_mx.^2));
-        mx = (rho.*tmp_mx)./(sigma+rho);
+        mx_new = (rho_new.*tmp_mx)./(sigma+rho_new);
 
         % Truncate negative rho's
-        neg_ind = (rho <= 1e-12);
-        rho(neg_ind) = 0.0;
-        mx(neg_ind) = 0.0;
+        neg_ind = (rho_new <= 1e-10);
+        rho_new(neg_ind) = 0.0;
+        mx_new(neg_ind) = 0.0;
 
         % Set up the second Proximal operator
-        tmp_rho = interp_t_at_rho(rho) - delta_rho./gamma;
-        tmp_mx = interp_x_at_m(mx) - delta_mx./gamma;
+        tmp_rho = interp_t_at_rho(rho_new) - delta_rho./gamma;
+        tmp_mx = interp_x_at_m(mx_new) - delta_mx./gamma;
 
         [rho_tilde, bx] = proj_div_free(tmp_rho, tmp_mx);
 
         % Extra-Gradient step
-        delta_rho = delta_rho - gamma*(interp_t_at_rho(rho) - rho_tilde);
-        delta_mx  = delta_mx  - gamma*(interp_x_at_m(mx) - bx);
+        delta_rho = delta_rho - gamma*(interp_t_at_rho(rho_new) - rho_tilde);
+        delta_mx  = delta_mx  - gamma*(interp_x_at_m(mx_new) - bx);
+        
+        % Running Error
+        drho = (rho_new - rho).^2;
+        dmx  = (mx_new - mx).^2;
+
+        residual_diff(iter) = sqrt(dt*dx*(sum(drho(:)) + sum(dmx(:))));
+
+         % Update
+        rho = rho_new;
+        mx  = mx_new;
     end
     
-    outs = 1;
+    outs.residual_diff = residual_diff;
 
 
     %% Helper Functions
@@ -221,8 +241,7 @@ function [rho,mx,outs] = ot1d_admm(rho0,rho1,opts)
 
         phi_temp = invert_neg_laplacian(dmu_dt + dpsi_dx);
         rho_out = mu + deriv_t_at_rho(phi_temp);
-        m_out   = psi + deriv_x_at_m(phi_temp);
-        
+        m_out   = psi + deriv_x_at_m(phi_temp);       
     end
     
 
