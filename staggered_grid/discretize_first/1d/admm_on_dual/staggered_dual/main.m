@@ -4,19 +4,19 @@ clear
 % % Grid in Space and Time 
 
 % (Staggered)
-nt = 63; ntp = nt+1; ntm = nt-1;
+nt = 64; ntp = nt+1; ntm = nt-1;
 dt = 1/nt;
 t = linspace(0,1,ntp)';
-nx = 127;
+nx = 128;
 nxp = nx+1; nxm = nx-1;
 dx = 1/nx;
 x = linspace(0,1,nxp);
 xx = (x(2:end) + x(1:end-1))/2;
 
 % Step Size
-gamma = 10;
-tau   = gamma/ 0.99;   % Constraint for PDHG (Linearized ADMM)
-maxIter = 100000;
+gamma = 1;
+tau   = gamma*1.5;   % Constraint for PDHG (Linearized ADMM)
+maxIter = 5000;
 
 % Time Boundary Conditions for rho
 % Gaussian to Gaussian
@@ -54,7 +54,7 @@ opts.tau = tau;
 % Create a figure
 figure;
 h = plot(xx, rho0, 'LineWidth', 2);
-ylim([0, max(rho_admm(:))*1.1]);  % set y-limits so they don't jump
+% ylim([0, max(rho_admm(:))*1.1]);  % set y-limits so they don't jump
 xlabel('x'); ylabel('\rho');
 title('Density transport');
 
