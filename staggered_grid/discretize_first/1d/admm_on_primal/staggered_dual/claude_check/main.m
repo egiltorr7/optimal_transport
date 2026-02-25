@@ -1,0 +1,86 @@
+%% Main Script the runs different algorithms for 1D OT Dynamic Formulation
+
+clear
+% % Grid in Space and Time 
+
+% (Staggered)
+nt = 128; ntp = nt+1; ntm = nt-1;
+dt = 1/nt;
+t = linspace(0,1,ntp)';
+nx = 256;
+nxp = nx+1; nxm = nx-1;
+dx = 1/nx;
+x = linspace(0,1,nxp);
+xx = (x(2:end) + x(1:end-1))/2;
+
+% Step Size
+% Following Fang et al. "Generalized ADMM": need tau/gamma > ||A^T A||_2
+% For interpolation operators: ||A||_2 ≈ 1, so ||A^T A||_2 ≈ 1
+% Original: tau = gamma/0.99 gave tau/gamma = 1.01 (too close to boundary!)
+% Need more margin for good convergence
+gamma = 10;
+tau   = 1.5*gamma;   % tau/gamma = 1.5 > 1 (50% margin for faster convergence)
+maxIter = 10000;
+
+% Time Boundary Conditions for rho
+% Gaussian to Gaussian
+eg = 'gaussian1d';
+meanvalue0 = 1/3; sigma0 = 0.05;
+meanvalue1 = 2/3; sigma1 = 0.05;
+Normal = @(x,meanvalue,sigma) 1/(sqrt(2*pi)*sigma)*exp(-0.5*((x-meanvalue)/sigma).^2);
+rho0 = Normal(xx,meanvalue0,sigma0);
+rho1 = Normal(xx,meanvalue1,sigma1);
+
+rho0 = rho0/sum(sum(rho0));
+rho1 = rho1/sum(sum(rho1));
+
+% Bimodal to Gaussian
+% meanvalue1 = 0.5; sigma1 = 0.1;
+% meanvalue0a = 0.1; meanvalue0b = 0.9;
+% sigma0 = 0.05;
+% Normal = @(x,meanvalue,sigma) 1/(sqrt(2*pi)*sigma)*exp(-0.5*((x-meanvalue)/sigma).^2);
+% rho0 = Normal(x,meanvalue0a,sigma0) + Normal(x,meanvalue0b,sigma0) + 0.1;
+% rho1 = Normal(x,meanvalue1,sigma1)+0.1;
+
+% opts.tol = 1e-10;
+opts.nt = nt;
+opts.nx = nx;
+opts.maxIter = maxIter;
+opts.gamma = gamma;
+opts.tau = tau;
+% opts.rho_analytical = rho_analytical;
+% opts.mx_analytical = mx_analytical;
+
+[rho_admm, mx_admm, outs_admm] = ot1d_admm(rho0,rho1,opts);
+
+%% Post Process
+
+% Create a figure
+figure;
+h = plot(xx, rho0, 'LineWidth', 2);
+ylim([0, max(rho_admm(:))*1.1]);  % set y-limits so they don't jump
+xlabel('x'); ylabel('\rho');
+title('Density transport');
+
+% Optional: create a video writer
+v = VideoWriter('rho_transport.mp4', 'MPEG-4');
+v.FrameRate = 1;  % adjust as needed
+open(v);
+
+for i = 1:nt
+    set(h, 'YData', rho_admm(i,:));  % update plot
+    title(sprintf('Density transport, t = %d/%d', i, nt));
+    drawnow;
+    
+    % write frame to video
+    frame = getframe(gcf);
+    writeVideo(v, frame);
+    
+    % optional: pause for visualization without saving
+    % pause(0.05)
+end
+
+close(v);
+%%
+figure(2)
+semilogy(2:maxIter,outs_admm.residual_diff(2:end))

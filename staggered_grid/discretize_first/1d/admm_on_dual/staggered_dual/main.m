@@ -14,18 +14,21 @@ x = linspace(0,1,nxp);
 xx = (x(2:end) + x(1:end-1))/2;
 
 % Step Size
-gamma = 10;
-tau   = gamma/ 0.99;   % Constraint for PDHG (Linearized ADMM)
-maxIter = 1000;
+gamma = 1;
+tau   = gamma*1.5;   % Constraint for PDHG (Linearized ADMM)
+maxIter = 5000;
 
 % Time Boundary Conditions for rho
 % Gaussian to Gaussian
 eg = 'gaussian1d';
-meanvalue0 = 1/3; sigma0 = 0.1;
-meanvalue1 = 2/3; sigma1 = 0.1;
+meanvalue0 = 1/3; sigma0 = 0.05;
+meanvalue1 = 2/3; sigma1 = 0.05;
 Normal = @(x,meanvalue,sigma) 1/(sqrt(2*pi)*sigma)*exp(-0.5*((x-meanvalue)/sigma).^2);
 rho0 = Normal(xx,meanvalue0,sigma0);
 rho1 = Normal(xx,meanvalue1,sigma1);
+
+rho0 = rho0/sum(sum(rho0));
+rho1 = rho1/sum(sum(rho1));
 
 % Bimodal to Gaussian
 % meanvalue1 = 0.5; sigma1 = 0.1;
@@ -51,7 +54,7 @@ opts.tau = tau;
 % Create a figure
 figure;
 h = plot(xx, rho0, 'LineWidth', 2);
-ylim([0, max(rho_admm(:))*1.1]);  % set y-limits so they don't jump
+% ylim([0, max(rho_admm(:))*1.1]);  % set y-limits so they don't jump
 xlabel('x'); ylabel('\rho');
 title('Density transport');
 
@@ -74,3 +77,6 @@ for i = 1:nt
 end
 
 close(v);
+%%
+figure(2)
+semilogy(1:maxIter,outs_admm.residual_diff)

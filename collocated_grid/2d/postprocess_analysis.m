@@ -20,8 +20,8 @@ grid_name = sprintf('tau%0.2f_nt%d_nx%d_ny%d', tau, nt, nx, ny);
 file_name = folder + case_name + grid_name;
 
 % Animation settings
-animate = false;
-save_animation = false;  % Set to true to save animation as GIF
+animate = true;
+save_animation = true;  % Set to true to save animation as GIF
 animation_file = figures_folder + "transport_animation_" + grid_name + ".gif";
 fps = 10;  % Frames per second for animation
 

@@ -16,6 +16,15 @@ function [rho,mx,outs] = ot1d_admm(rho0,rho1,opts)
     residual_diff = zeros(maxIter,1);
     residual_analytical  = zeros(maxIter,1);
 
+    % Check if reference solution is provided for true error computation
+    compute_true_error = false;
+    if isfield(opts, 'rho_star') && isfield(opts, 'mx_star')
+        compute_true_error = true;
+        rho_star = opts.rho_star;
+        mx_star = opts.mx_star;
+        true_error = zeros(maxIter,1);
+    end
+
     % BC
     dirichlet_bc_space  = zeros(nt,1);
     
@@ -24,35 +33,53 @@ function [rho,mx,outs] = ot1d_admm(rho0,rho1,opts)
     % Initial Guess (Linear Interpolation btwn rho0 & rho1)
     % Primal Vars
     rho = (1-tt).*rho0 + tt.*rho1; 
-    mx  = ones(nt,nx);
-    % rho_new = rho; mx_new  = ones(nt,nx);
+    mx  = zeros(nt,nx); 
 
     % Dual Vars
-    rho_tilde = interp_t_at_rho(rho);
-    bx = interp_x_at_m(mx);
+    rho_tilde = interp_t_at_rho(rho); rho_tilde_new = rho_tilde;
+    bx = interp_x_at_m(mx); bx_new = bx;
     
     % Extra Gradient Step
-    delta_rho = zeros(size(rho_tilde)); delta_mx = zeros(size(bx));
+    delta_rho = zeros(size(rho)); delta_mx = zeros(size(mx));
 
     % Eigenvalues for the Laplacian
     lambda_x = (2*ones(1,nx) - 2*cos(pi*dx.*(0:nxm)))/dx/dx;
     lambda_t = (2*ones(nt,1) - 2*cos(pi*dt.*(0:ntm)'))/dt/dt;
     lambda_lap = lambda_x + lambda_t;
 
-    for iter = 1:maxIter
+    % Better guess for velocity
+    % potential = ones(nt,1)*(rho1 - rho0);
+    % potential = mirt_dctn(potential);
+    % potential = potential./lambda_x;
+    % potential(1) = 0.0;
+    % potential = mirt_idctn(potential);
+    % potential = interp_x_at_m(potential);
+    % mx = deriv_x_at_phi(potential,dirichlet_bc_space,dirichlet_bc_space);
+    % mx = rho.*mx;
+    
 
+    for iter = 1:maxIter
+        
         % Set up for first Proximal Operator
            
-        % A(rho,m) - (rho_tilde,b) - \delta/gamma
-        tmp_rho = interp_t_at_rho(rho) - rho_tilde - delta_rho./gamma;
-        tmp_mx  = interp_x_at_m(mx) - bx - delta_mx./gamma;
+        % (A(rho_tilde,b) - d) - (rho,m) - \delta/gamma
+        tmp_rho = interp_t_at_phi(rho_tilde,rho0,rho1) - rho - delta_rho./gamma;
+        tmp_mx  = interp_x_at_phi(bx,dirichlet_bc_space,dirichlet_bc_space) - mx - delta_mx./gamma;
         
-        % (rho,m) - (gamma/tau)*A^T*[(tmp_rho,tmp,mx)]
-        tmp_rho = rho - (gamma/tau)*interp_t_at_phi(tmp_rho,rho0,rho1);
-        tmp_mx  = mx - (gamma/tau)*interp_x_at_phi(tmp_mx,dirichlet_bc_space,dirichlet_bc_space);
+        % (rho_tilde,b) - (gamma/tau)*A^T*[(tmp_rho,tmp,mx)]
+        tmp_rho = rho_tilde - (gamma/tau)*interp_t_at_rho(tmp_rho); 
+        tmp_mx  = bx - (gamma/tau)*interp_x_at_m(tmp_mx);
+
+        [rho_tilde_new, bx_new] = proj_div_free(tmp_rho, tmp_mx);
+
+
+        % Set up the second Proximal operator
+        tmp_rho = interp_t_at_phi(rho_tilde_new,rho0,rho1) - delta_rho./gamma;
+        tmp_mx = interp_x_at_phi(bx_new,dirichlet_bc_space,dirichlet_bc_space) - delta_mx./gamma;
+
 
         % Proximal Step for the Kinetic Energy Term
-        sigma = 1/tau; % Just to make code cleaner
+        sigma = 1/gamma; % Just to make code cleaner
         rho = solve_cubic(1,2*sigma-tmp_rho,sigma^2-2*sigma*tmp_rho,...
                                 -sigma*(sigma*tmp_rho + 0.5.*tmp_mx.^2));
         mx = (rho.*tmp_mx)./(sigma+rho);
@@ -62,18 +89,30 @@ function [rho,mx,outs] = ot1d_admm(rho0,rho1,opts)
         rho(neg_ind) = 0.0;
         mx(neg_ind) = 0.0;
 
-        % Set up the second Proximal operator
-        tmp_rho = interp_t_at_rho(rho) - delta_rho./gamma;
-        tmp_mx = interp_x_at_m(mx) - delta_mx./gamma;
-
-        [rho_tilde, bx] = proj_div_free(tmp_rho, tmp_mx);
-
         % Extra-Gradient step
-        delta_rho = delta_rho - gamma*(interp_t_at_rho(rho) - rho_tilde);
-        delta_mx  = delta_mx  - gamma*(interp_x_at_m(mx) - bx);
+        delta_rho = delta_rho - gamma*(interp_t_at_phi(rho_tilde_new,rho0,rho1) - rho);
+        delta_mx  = delta_mx  - gamma*(interp_x_at_phi(bx_new,dirichlet_bc_space,dirichlet_bc_space) - mx);
+        
+        % Running Error
+        drho = (rho_tilde_new - rho_tilde).^2;
+        dmx  = (bx_new - bx).^2;
+
+        residual_diff(iter) = sqrt(dt*dx*(sum(drho(:)) + sum(dmx(:))));
+
+        % Compute true error if reference solution is provided
+        if compute_true_error
+            true_error(iter) = sqrt(sum((rho(:) - rho_star(:)).^2) + sum((mx(:) - mx_star(:)).^2)) * sqrt(dt*dx);
+        end
+
+         % Update
+        rho_tilde = rho_tilde_new;
+        bx  = bx_new;
     end
-    
-    outs = 1;
+
+    outs.residual_diff = residual_diff;
+    if compute_true_error
+        outs.true_error = true_error;
+    end
 
 
     %% Helper Functions
@@ -221,8 +260,9 @@ function [rho,mx,outs] = ot1d_admm(rho0,rho1,opts)
 
         phi_temp = invert_neg_laplacian(dmu_dt + dpsi_dx);
         rho_out = mu + deriv_t_at_rho(phi_temp);
-        m_out   = psi + deriv_x_at_m(phi_temp);
-        
+        m_out   = psi + deriv_x_at_m(phi_temp);  
+        % max(max(abs(deriv_t_at_phi(rho_out,rho0,rho1) + deriv_x_at_phi(m_out,dirichlet_bc,dirichlet_bc))))
+
     end
     
 
