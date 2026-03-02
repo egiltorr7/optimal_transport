@@ -31,20 +31,24 @@ from scipy.stats import norm
 from scipy.sparse import diags, eye as speye, lil_matrix
 from scipy.sparse.linalg import factorized
 from scipy.special import logsumexp
+from pdb import set_trace as keyboard
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1.  PARAMETERS
 # ─────────────────────────────────────────────────────────────────────────────
 sigma = 0.3          # reference SDE diffusion  dX = u dt + σ dW
-mu0, s0 = -1.5, 0.5  # ρ₀ = N(μ₀, s₀²)
-mu1, s1 =  1.5, 0.5  # ρ₁ = N(μ₁, s₁²)
+# mu0, s0 = -1.5, 0.5  # ρ₀ = N(μ₀, s₀²)
+# mu1, s1 =  1.5, 0.5  # ρ₁ = N(μ₁, s₁²)
+mu0, s0 = 0.25, 0.05  # ρ₀ = N(μ₀, s₀²)
+mu1, s1 =  0.75, 0.05  # ρ₁ = N(μ₁, s₁²)
 T     = 1.0
 
 # Grid — choose Nt so that CFL = |v_max|·Δt/Δx < 1
 # For this problem |v_max| ≈ |μ₁−μ₀|/T = 3;  need Δt/Δx < 1/3.
-Nt = 48       # time slices
-Nx = 64       # spatial points
-x  = np.linspace(-4.0, 4.0, Nx)
+Nt = 5       # time slices
+Nx = 5       # spatial points
+# x  = np.linspace(-4.0, 4.0, Nx)
+x  = np.linspace(-0.0, 1.0, Nx)
 t  = np.linspace(0.0, T, Nt)
 dx = x[1] - x[0]
 dt = t[1] - t[0]
@@ -129,7 +133,7 @@ for i in range(Nt):
     C[row0 + Nt + i,     Nt*Nx + i*Nx + Nx-1] = 1.0   # m[i, Nx-1 ] = 0
 
 C = C.tocsr()
-
+# keyboard()
 # Pre-factored sparse solve for CCᵀ  (done ONCE, reused every ADMM iteration)
 print("Factorising CCᵀ (sparse) …", end=" ", flush=True)
 CCT      = (C @ C.T).tocsc()
