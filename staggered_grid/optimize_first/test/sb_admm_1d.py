@@ -14,6 +14,7 @@ from scipy.fft import dct, idct
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from pdb import set_trace as keyboard
 
 from operators import (
     build_all_operators, build_rhs,
@@ -157,14 +158,18 @@ def solve_phi(F, Nt, Nx, dt, dx, eps):
     Nt × Nt tridiagonal systems, one per spatial DCT-II mode k.
 
     For each mode k:
-        T^k = (D_t - eps*lk*A_t)(D_t - eps*lk*A_t)^T + lk*I_Nt
+        T^k = (D_t + eps*lk*A_t)(D_t + eps*lk*A_t)^T + lk*I_Nt
     where lk = (2/dx^2)*(1 - cos(pi*k/Nx)) >= 0 is the kth eigenvalue of L_x.
+
+    The FP operator is (D_t + eps*lk*A_t) per mode because the full constraint is
+    Dt @ rho_bar + eps*(Lx @ (At @ rho_bar).T).T + b @ Dx.T = d, and Lx ≈ −∂_xx
+    (positive semidefinite), so +eps*Lx gives forward diffusion.
 
     T^k is symmetric tridiagonal with:
         interior diagonal:  alpha = 2/dt^2 + eps^2*lk^2/2 + lk
         off-diagonal:       beta  = -1/dt^2 + eps^2*lk^2/4
-        corner (0,0):       1/dt^2 - eps*lk/dt + eps^2*lk^2/4 + lk
-        corner (Nt-1,Nt-1): 1/dt^2 + eps*lk/dt + eps^2*lk^2/4 + lk
+        corner (0,0):       1/dt^2 + eps*lk/dt + eps^2*lk^2/4 + lk
+        corner (Nt-1,Nt-1): 1/dt^2 - eps*lk/dt + eps^2*lk^2/4 + lk
 
     T^0 (k=0) is the Neumann Laplacian D_t D_t^T — singular (null = const).
     Its RHS is always consistent; we return the minimum-norm solution.
@@ -198,8 +203,8 @@ def solve_phi(F, Nt, Nx, dt, dx, eps):
         beta  = -1.0/dt**2 + 0.25*eps**2*lk**2        # off-diagonal
 
         main_diag = np.full(Nt, alpha)
-        main_diag[0]  = 1.0/dt**2 - eps*lk/dt + 0.25*eps**2*lk**2 + lk
-        main_diag[-1] = 1.0/dt**2 + eps*lk/dt + 0.25*eps**2*lk**2 + lk
+        main_diag[0]  = 1.0/dt**2 + eps*lk/dt + 0.25*eps**2*lk**2 + lk
+        main_diag[-1] = 1.0/dt**2 - eps*lk/dt + 0.25*eps**2*lk**2 + lk
         off_diag = np.full(Nt - 1, beta)
 
         if lk < 1e-14:
@@ -235,12 +240,17 @@ def project_C(p_rho, p_b, ops, d, Nt, Nx, dt, dx, eps):
     """
     Project (p_rho, p_b) onto C = {(rho_bar, b) : FP constraint holds}.
 
-    The constraint is  FP_rhobar * vec(rho_bar) + FP_b * vec(b) = d.
-    Projection solves the KKT system:
-        M_SB * phi = FP_rhobar * vec(p_rho) + FP_b * vec(p_b) - d
+    FP constraint (time-slow, vector index i*Nx+j):
+        Dt @ rho_bar + eps*(Lx @ (At @ rho_bar).T).T + b @ Dx.T == d
+
+    where Lx = Dx @ Dx.T ≈ −∂_xx (positive semidefinite), so +eps*Lx gives
+    the correct forward-diffusion term eps*∂_xx rho.
+
+    Projection solves the KKT system  M_SB * phi = rhs  where
+        rhs = (Dt @ p_rho + eps*(Lx @ (At @ p_rho).T).T + p_b @ Dx.T).ravel() − d
     then
-        rho_bar = p_rho - FP_rhobar^T * phi  (reshaped)
-        b       = p_b   - FP_b^T     * phi  (reshaped)
+        rho_bar = p_rho − (Dt.T @ phi + eps*(Lx @ (At.T @ phi).T).T)
+        b       = p_b   − phi @ Dx
 
     Parameters
     ----------
@@ -255,23 +265,24 @@ def project_C(p_rho, p_b, ops, d, Nt, Nx, dt, dx, eps):
     rho_bar : ndarray, shape (Nt-1, Nx)
     b       : ndarray, shape (Nt,   Nx-1)
     """
-    FP_rhobar = ops['FP_rhobar']   # (Nt*Nx, (Nt-1)*Nx)
-    FP_b      = ops['FP_b']        # (Nt*Nx,  Nt*(Nx-1))
+    Dt = ops['Dt']   # sparse (Nt,   Nt-1)
+    At = ops['At']   # sparse (Nt,   Nt-1)
+    Dx = ops['Dx']   # sparse (Nx,   Nx-1)
+    Lx = ops['Lx']   # sparse (Nx,   Nx)
 
-    vec_p_rho = p_rho.ravel()
-    vec_p_b   = p_b.ravel()
+    # FP_rhobar @ p_rho = Dt @ p_rho + eps * (Lx @ (At @ p_rho).T).T
+    # FP_b      @ p_b   = p_b @ Dx.T
+    rhs_mat = (Dt @ p_rho
+               + eps * (Lx @ (At @ p_rho).T).T
+               + p_b @ Dx.T)               # shape (Nt, Nx)
+    F = rhs_mat - d.reshape(Nt, Nx)
 
-    # RHS for phi: residual of constraint at (p_rho, p_b)
-    rhs = FP_rhobar @ vec_p_rho + FP_b @ vec_p_b - d   # shape (Nt*Nx,)
+    phi = solve_phi(F, Nt, Nx, dt, dx, eps)    # shape (Nt, Nx)
 
-    # Reshape to (Nt, Nx) for the DCT/DST solver
-    F = rhs.reshape(Nt, Nx)
-    phi_arr = solve_phi(F, Nt, Nx, dt, dx, eps)          # shape (Nt, Nx)
-    phi_vec = phi_arr.ravel()                              # shape (Nt*Nx,)
-
-    # Update
-    rho_bar = p_rho - (FP_rhobar.T @ phi_vec).reshape(Nt-1, Nx)
-    b       = p_b   - (FP_b.T      @ phi_vec).reshape(Nt,   Nx-1)
+    # FP_rhobar.T @ phi = Dt.T @ phi + eps * (Lx @ (At.T @ phi).T).T
+    # FP_b.T      @ phi = phi @ Dx
+    rho_bar = p_rho - (Dt.T @ phi + eps * (Lx @ (At.T @ phi).T).T)   # (Nt-1, Nx)
+    b       = p_b   - phi @ Dx                                         # (Nt,   Nx-1)
     return rho_bar, b
 
 
@@ -294,7 +305,7 @@ def interpolate_to_staggered(rho, m):
 # ---------------------------------------------------------------------------
 
 def admm_solve(rho0, rho1, Nt, Nx, eps, gamma=1.0, tau=5.0,
-               max_iter=2000, tol=1e-4):
+               max_iter=2000, tol=1e-4, alpha=1.5):
     """
     Solve the 1D Schrödinger Bridge via linearized ADMM.
 
@@ -309,6 +320,9 @@ def admm_solve(rho0, rho1, Nt, Nx, eps, gamma=1.0, tau=5.0,
     tol        : float — convergence tolerance on primal residual ||A(rho,m)-(rho_bar,b)||.
                          The dual residual converges at O(1/k) and is printed but not
                          used as stopping criterion.
+    alpha      : float — over-relaxation parameter in (1, 2).  alpha=1 is standard
+                         ADMM; alpha=1.7 typically reduces oscillations and speeds
+                         convergence (Boyd et al. 2011, Section 3.4.3).
 
     Returns
     -------
@@ -346,10 +360,12 @@ def admm_solve(rho0, rho1, Nt, Nx, eps, gamma=1.0, tau=5.0,
     delta_b   = np.zeros_like(b)
 
     # History
-    primal_hist, dual_hist, obj_hist, fp_hist = [], [], [], []
+    primal_hist, dual_hist, obj_hist, fp_hist, delta_u_hist = [], [], [], [], []
 
-    FP_rhobar = ops['FP_rhobar']
-    FP_b      = ops['FP_b']
+    Dt = ops['Dt']
+    At = ops['At']
+    Dx = ops['Dx']
+    Lx = ops['Lx']
 
     for it in range(max_iter):
 
@@ -371,27 +387,35 @@ def admm_solve(rho0, rho1, Nt, Nx, eps, gamma=1.0, tau=5.0,
 
         rho_new, m_new = prox_J(u, v, dt, dx, tau)
 
-        # ---- Step 2: (rho_bar, b) projection update ----------------------
+        # Primal update error ||u_{k+1} - u_k|| (before assignment)
+        du_rho = np.linalg.norm(rho_new - rho) / np.sqrt(Nt * Nx)
+        du_m   = np.linalg.norm(m_new   - m)   / np.sqrt(Nt * Nx)
+        delta_u_hist.append((du_rho, du_m))
+
+        # ---- Step 2: over-relaxed projection update ----------------------
         rho_bar_prev = rho_bar.copy()
         b_prev       = b.copy()
 
-        rho_bar_A2, b_A2 = interpolate_to_staggered(rho_new, m_new)
-        p_rho = rho_bar_A2 + delta_rho / gamma
-        p_b   = b_A2       + delta_b   / gamma
+        rho_bar_A, b_A = interpolate_to_staggered(rho_new, m_new)
+        # Over-relaxation: alpha*A(u_new) + (1-alpha)*(rho_bar, b)
+        rho_bar_A_r = alpha * rho_bar_A + (1.0 - alpha) * rho_bar
+        b_A_r       = alpha * b_A       + (1.0 - alpha) * b
+        p_rho = rho_bar_A_r + delta_rho / gamma
+        p_b   = b_A_r       + delta_b   / gamma
 
         rho_bar, b = project_C(p_rho, p_b, ops, d, Nt, Nx, dt, dx, eps)
 
-        # ---- Step 3: dual update -----------------------------------------
-        rho_bar_A3, b_A3 = interpolate_to_staggered(rho_new, m_new)
-        delta_rho = delta_rho + gamma * (rho_bar_A3 - rho_bar)
-        delta_b   = delta_b   + gamma * (b_A3       - b)
+        # ---- Step 3: dual update (uses relaxed auxiliary) ----------------
+        delta_rho = delta_rho + gamma * (rho_bar_A_r - rho_bar)
+        delta_b   = delta_b   + gamma * (b_A_r       - b)
 
         # ---- Convergence diagnostics ------------------------------------
-        # Normalize residuals by sqrt(N_elements) for grid-size independence.
+        # Primal residual: unrelaxed A(u_new) - y (standard definition).
+        # Normalize by sqrt(N_elements) for grid-size independence.
         N_primal = (Nt - 1) * Nx + Nt * (Nx - 1)
         N_dual   = 2 * Nt * Nx
-        primal_rho = np.linalg.norm(rho_bar_A3 - rho_bar)
-        primal_b   = np.linalg.norm(b_A3 - b)
+        primal_rho = np.linalg.norm(rho_bar_A - rho_bar)
+        primal_b   = np.linalg.norm(b_A - b)
         primal_res = np.sqrt(primal_rho**2 + primal_b**2) / np.sqrt(N_primal)
 
         dual_rho   = gamma * np.linalg.norm(apply_Arho_T(rho_bar - rho_bar_prev, Nt))
@@ -404,9 +428,11 @@ def admm_solve(rho0, rho1, Nt, Nx, eps, gamma=1.0, tau=5.0,
                            m_new**2 / (2.0 * rho_new), 0.0)
         obj = dt * dx * np.sum(kin)
 
-        # Fokker-Planck violation
-        fp_viol = np.linalg.norm(
-            FP_rhobar @ rho_bar.ravel() + FP_b @ b.ravel() - d)
+        # Fokker-Planck violation  ||Dt@rho_bar + eps*(Lx@(At@rho_bar).T).T + b@Dx.T - d||
+        fp_mat = (Dt @ rho_bar
+                  + eps * (Lx @ (At @ rho_bar).T).T
+                  + b @ Dx.T)
+        fp_viol = np.linalg.norm(fp_mat.ravel() - d)
 
         primal_hist.append(primal_res)
         dual_hist.append(dual_res)
@@ -430,6 +456,7 @@ def admm_solve(rho0, rho1, Nt, Nx, eps, gamma=1.0, tau=5.0,
         dual_res=np.array(dual_hist),
         obj=np.array(obj_hist),
         fp_viol=np.array(fp_hist),
+        delta_u=np.array(delta_u_hist),   # shape (n_iters, 2): [du_rho, du_m]
     )
     return rho, m, info
 
@@ -438,8 +465,16 @@ def admm_solve(rho0, rho1, Nt, Nx, eps, gamma=1.0, tau=5.0,
 # Plotting helpers
 # ---------------------------------------------------------------------------
 
-def save_plots(rho, m, info, rho0, rho1, Nt, Nx, eps, prefix='sb'):
-    """Save 5 diagnostic plots as PNG files."""
+def save_plots(rho, m, info, rho0, rho1, Nt, Nx, eps, prefix='sb',
+               rho_theory=None):
+    """
+    Save diagnostic plots as PNG files.
+
+    rho_theory : callable(t, x) -> ndarray, optional
+        Analytical density at time t on grid x.  When provided, the
+        snapshot plot overlays the theory as dashed curves of the same
+        colour so numerical vs analytical can be compared directly.
+    """
     dt = 1.0 / Nt
     dx = 1.0 / Nx
     t_arr = np.linspace(dt/2, 1.0 - dt/2, Nt)
@@ -488,16 +523,66 @@ def save_plots(rho, m, info, rho0, rho1, Nt, Nx, eps, prefix='sb'):
     fig.savefig(f'{prefix}_convergence.png', dpi=100)
     plt.close(fig)
 
-    # 5. Snapshots of rho at t=0, 0.25, 0.5, 0.75, 1.0
-    snap_t = [0.0, 0.25, 0.5, 0.75, 1.0]
-    fig, ax = plt.subplots()
-    for s in snap_t:
+    # 5. Snapshots at 11 time instances with optional theory overlay
+    from matplotlib.lines import Line2D
+    snap_t = np.linspace(0.0, 1.0, 11)   # t = 0, 0.1, 0.2, ..., 1.0
+    cmap   = plt.cm.plasma
+    colors = cmap(np.linspace(0.05, 0.95, len(snap_t)))
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    for i, s in enumerate(snap_t):
         idx = int(round(s * (Nt - 1)))
         idx = np.clip(idx, 0, Nt - 1)
-        ax.plot(x_arr, rho[idx], label=f't={s}')
-    ax.legend(); ax.set_xlabel('x')
-    ax.set_title(f'Snapshots rho(t,x), eps={eps}')
-    fig.savefig(f'{prefix}_snapshots.png', dpi=100)
+        ax.plot(x_arr, rho[idx], color=colors[i], lw=1.8)
+        if rho_theory is not None:
+            ax.plot(x_arr, rho_theory(s, x_arr), '--',
+                    color=colors[i], lw=1.2, alpha=0.75)
+
+    # Colorbar to read off time from colour
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(0.0, 1.0))
+    sm.set_array([])
+    plt.colorbar(sm, ax=ax, label='t')
+
+    # Legend: line style only
+    handles = [Line2D([0], [0], color='k', lw=1.8, label='ADMM')]
+    if rho_theory is not None:
+        handles.append(Line2D([0], [0], color='k', lw=1.2, ls='--',
+                               alpha=0.75, label='theory'))
+    ax.legend(handles=handles, loc='upper right')
+
+    ax.set_xlabel('x'); ax.set_ylabel(r'$\rho(t,x)$')
+    ax.set_title(f'Density evolution, eps={eps}')
+    ax.grid(True, alpha=0.25)
+    fig.savefig(f'{prefix}_snapshots.png', dpi=120, bbox_inches='tight')
+    plt.close(fig)
+
+    # 6. L2 error vs time  (only when analytical theory is available)
+    if rho_theory is not None:
+        errs = []
+        t_nodes = np.linspace(0.0, 1.0, Nt)
+        for i in range(Nt):
+            rho_th = rho_theory(t_nodes[i], x_arr)
+            errs.append(np.sqrt(dx * np.sum((rho[i] - rho_th)**2)))
+        fig, ax = plt.subplots(figsize=(7, 4))
+        ax.plot(t_nodes, errs, lw=1.8)
+        ax.set_xlabel('t')
+        ax.set_ylabel(r'$\|\rho_\mathrm{ADMM}(t,\cdot)-\rho_\mathrm{th}(t,\cdot)\|_{L^2}$')
+        ax.set_title(f'L2 error vs time, eps={eps}')
+        ax.grid(True, alpha=0.3)
+        fig.savefig(f'{prefix}_l2error.png', dpi=100, bbox_inches='tight')
+        plt.close(fig)
+
+    # 8. Primal update error ||u_{k+1} - u_k||
+    du = info['delta_u']   # shape (n_iters, 2)
+    du_combined = np.sqrt(du[:, 0]**2 + du[:, 1]**2)
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.semilogy(du[:, 0],   label=r'$\|\rho_{k+1}-\rho_k\|$')
+    ax.semilogy(du[:, 1],   label=r'$\|m_{k+1}-m_k\|$')
+    ax.semilogy(du_combined, label=r'combined $\|u_{k+1}-u_k\|$', linestyle='--')
+    ax.legend(); ax.set_xlabel('iteration')
+    ax.set_title(f'Primal update error, eps={eps}')
+    ax.grid(True, which='both', alpha=0.3)
+    fig.savefig(f'{prefix}_delta_u.png', dpi=100)
     plt.close(fig)
 
     print(f"  Plots saved with prefix '{prefix}'.")
@@ -512,44 +597,111 @@ def gaussian(x, mu, sigma):
     return g / (g.sum() * (x[1] - x[0]))   # normalised
 
 
+def sb_theory_gaussian(t, x, mu0, mu1, sigma0, sigma1, eps, T=1.0):
+    """
+    Analytical SB path marginal for Gaussian boundary conditions.
+
+    rho(t, x) = N(mu(t), v_SB(t))  (on the full real line)
+
+    Parameters
+    ----------
+    t           : float in [0, 1]
+    x           : ndarray — spatial grid
+    mu0, mu1    : float — centres of rho0, rho1
+    sigma0, sigma1 : float — std devs of rho0, rho1
+    eps         : float — diffusion coefficient
+    T           : float — total time (default 1)
+
+    Returns
+    -------
+    ndarray, shape (len(x),) — unnormalised Gaussian density on x
+    """
+    # FP equation  ∂_t rho = eps * ∂_xx rho  corresponds to SDE  dX = sqrt(2*eps) dW,
+    # so reference variance per unit time is sigma_ref^2 = 2*eps.
+    # Cross-covariance c satisfies  c^2 + 2*eps*T*c − sigma0^2*sigma1^2 = 0:
+    c_SB = -eps * T + np.sqrt((eps * T)**2 + sigma0**2 * sigma1**2)
+
+    # Linear mean and SB variance
+    mu_t = (1.0 - t) * mu0 + t * mu1
+    v_t  = ((1.0 - t)**2 * sigma0**2
+            + t**2 * sigma1**2
+            + 2.0 * t * (1.0 - t) * c_SB
+            + 2.0 * eps * t * (1.0 - t) * T)
+
+    return np.exp(-0.5 * (x - mu_t)**2 / v_t) / np.sqrt(2.0 * np.pi * v_t)
+
+
 def main():
-    # sigma=0.05 needs ~6 cells/sigma → Nx=64 gives dx=1/64, sigma/dx≈3.2
-    # For very accurate OT use Nx=128; Nx=64 is a practical compromise.
-    Nt, Nx = 64, 64
+    # Nt=64, Nx=128: dx=1/128 → sigma/dx ≈ 6.4 cells for sigma=0.05 (well resolved)
+    # Nt, Nx = 4, 4
+    Nt, Nx = 64, 128
     x = np.linspace(1.0/(2*Nx), 1.0 - 1.0/(2*Nx), Nx)
+
+    # keyboard()
+
+    mu0, mu1, sigma = 0.25, 0.75, 0.05
+    rho0 = gaussian(x, mu0, sigma)
+    rho1 = gaussian(x, mu1, sigma)
 
     # ---- Test 1: Gaussian→Gaussian, eps=0 (Benamou-Brenier OT) -----------
     print("=" * 60)
     print("Test 1: Gaussian→Gaussian, eps=0 (Benamou-Brenier OT)")
-    print("  Analytical J* = 0.5*(0.75-0.25)^2 = 0.125  [exact for uniform shift]")
-    rho0 = gaussian(x, 0.25, 0.05)
-    rho1 = gaussian(x, 0.75, 0.05)
+    print("  Analytical J* = 0.5*(0.75-0.25)^2 = 0.125")
     rho, m, info = admm_solve(rho0, rho1, Nt, Nx, eps=0.0,
                               gamma=1.0, tau=5.0, max_iter=3000, tol=1e-4)
     print(f"  Final objective: {info['obj'][-1]:.4f}  (expect → 0.125)")
+    # OT theory: displacement interpolation → rho(t,.) = N(mu(t), sigma^2)
+    # (sigma constant because sigma0=sigma1; only the mean translates)
+    ot_theory = lambda t, x_: sb_theory_gaussian(t, x_, mu0, mu1, sigma, sigma, eps=0.0)
     save_plots(rho, m, info, rho0, rho1, Nt, Nx, eps=0.0,
-               prefix='test1_OT')
+               prefix='test1_OT', rho_theory=ot_theory)
 
     # ---- Test 2: Same marginals, eps=0.05 (Schrödinger Bridge) -----------
     print("=" * 60)
     print("Test 2: Gaussian→Gaussian, eps=0.05 (Schrödinger Bridge)")
     print("  Expect: smoother, wider paths than OT; J_SB > J_OT")
-    rho, m, info = admm_solve(rho0, rho1, Nt, Nx, eps=0.05,
+    eps_sb = 0.05
+    rho, m, info = admm_solve(rho0, rho1, Nt, Nx, eps=eps_sb,
                               gamma=1.0, tau=5.0, max_iter=3000, tol=1e-4)
     print(f"  Final objective: {info['obj'][-1]:.4f}")
-    save_plots(rho, m, info, rho0, rho1, Nt, Nx, eps=0.05,
-               prefix='test2_SB05')
+    sb_theory = lambda t, x_: sb_theory_gaussian(
+        t, x_, mu0, mu1, sigma, sigma, eps=eps_sb)
+    save_plots(rho, m, info, rho0, rho1, Nt, Nx, eps=eps_sb,
+               prefix='test2_SB05', rho_theory=sb_theory)
 
-    # ---- Test 3: Two-hump → one-hump, eps=0.05 ---------------------------
+    # ---- Eps sweep: 1e-5 → 0.04  ----------------------------------------
+    # stiffness ratio = eps * 2*Nx^2 * dt = eps * 2*128^2/64 = eps * 512
+    # < 1 for eps < ~0.002  →  1e-5,1e-4,1e-3 match theory closely
+    # > 1 for eps >= 0.01   →  boundary marginals degrade progressively
     print("=" * 60)
-    print("Test 3: Two-hump→one-hump, eps=0.05")
-    rho0_2 = 0.5*gaussian(x, 0.25, 0.05) + 0.5*gaussian(x, 0.75, 0.05)
-    rho1_2 = gaussian(x, 0.5, 0.1)
-    rho, m, info = admm_solve(rho0_2, rho1_2, Nt, Nx, eps=0.05,
-                              gamma=1.0, tau=5.0, max_iter=3000, tol=1e-4)
-    print(f"  Final objective: {info['obj'][-1]:.4f}")
-    save_plots(rho, m, info, rho0_2, rho1_2, Nt, Nx, eps=0.05,
-               prefix='test3_twohump')
+    print("Eps sweep: eps = 1e-5, 1e-4, 1e-3, 0.01, 0.02, 0.03, 0.04")
+    for eps_val in [1e-5, 1e-4, 1e-3, 0.01, 0.02, 0.03, 0.04]:
+        stiff = eps_val * 2 * Nx**2 / Nt
+        print(f"\n  -- eps = {eps_val}  (stiffness ratio {stiff:.2f}) --")
+        rho_e, m_e, info_e = admm_solve(rho0, rho1, Nt, Nx, eps=eps_val,
+                                        gamma=1.0, tau=5.0,
+                                        max_iter=3000, tol=1e-4)
+        print(f"  Final objective: {info_e['obj'][-1]:.6f}")
+        theory_e = lambda t, x_, ev=eps_val: sb_theory_gaussian(
+            t, x_, mu0, mu1, sigma, sigma, eps=ev)
+        tag = f'{eps_val:.2g}'.replace('.', 'p').replace('-', 'm')
+        save_plots(rho_e, m_e, info_e, rho0, rho1, Nt, Nx, eps=eps_val,
+                   prefix=f'test_eps{tag}', rho_theory=theory_e)
+
+    # ---- eps=0.05, Nt=512: reduce boundary stiffness --------------------
+    # stiffness ratio drops from 12.8 (Nt=64) to 3.2 (Nt=512)
+    print("=" * 60)
+    Nt_fine = 512
+    stiff_fine = 0.05 * 2 * Nx**2 / Nt_fine
+    print(f"Test: eps=0.05, Nt={Nt_fine}  (stiffness ratio {stiff_fine:.2f})")
+    rho_f, m_f, info_f = admm_solve(rho0, rho1, Nt_fine, Nx, eps=0.05,
+                                    gamma=1.0, tau=5.0,
+                                    max_iter=10000, tol=1e-4)
+    print(f"  Final objective: {info_f['obj'][-1]:.4f}")
+    sb_theory_f = lambda t, x_: sb_theory_gaussian(
+        t, x_, mu0, mu1, sigma, sigma, eps=0.05)
+    save_plots(rho_f, m_f, info_f, rho0, rho1, Nt_fine, Nx, eps=0.05,
+               prefix='test_SB05_Nt512', rho_theory=sb_theory_f)
 
 
 if __name__ == '__main__':

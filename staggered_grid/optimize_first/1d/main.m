@@ -21,7 +21,7 @@ xx = (x(2:end) + x(1:end-1))/2;
 % Just doing ADMM so no restriction on step size
 gamma = 10;
 maxIter = 10000;
-vareps = 1e-6;   % Parameter for Schrodinger Bridge
+vareps = 1e-4;   % Parameter for Schrodinger Bridge
 
 % Reference solution parameters
 compute_reference = true;  % Set to true to compute and save reference solution

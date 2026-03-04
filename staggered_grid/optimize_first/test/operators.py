@@ -14,6 +14,7 @@ Kronecker products and RHS construction are also provided.
 
 import numpy as np
 import scipy.sparse as sp
+from pdb import set_trace as keyboard
 
 
 # ---------------------------------------------------------------------------
@@ -114,19 +115,23 @@ def build_Am(Nx: int) -> sp.csr_matrix:
 
 
 # ---------------------------------------------------------------------------
-# Full-grid operators (Kronecker products)
+# 1-D operator dictionary
 # ---------------------------------------------------------------------------
 
 def build_all_operators(Nt: int, Nx: int, dt: float, dx: float, eps: float):
     """
-    Build and return all discrete operators as a dict.
+    Build and return all discrete 1-D operators as a dict.
 
     Keys:
-      Dt, At, Dx, Lx       — 1-D sparse operators
+      Dt, At, Dx, Lx       — 1-D sparse operators (scipy csr_matrix)
       Arho, Am             — interpolation operators
-      FP_rhobar, FP_b      — blocks of the Fokker-Planck matrix
-                             FP_rhobar = I_x ⊗ D_t − ε L_x ⊗ A_t
-                             FP_b      = D_x ⊗ I_t
+
+    The Fokker-Planck constraint (time-slow, i.e. vector index i*Nx+j) is:
+
+        (Dt @ rho_bar + eps * (Lx @ (At @ rho_bar).T).T + b @ Dx.T) == d
+
+    where Lx = Dx @ Dx.T is the *positive* Neumann Laplacian (Lx ≈ −∂_xx),
+    so +eps*Lx gives forward diffusion (+eps*∂_xx after sign flip).
     """
     Dt   = build_Dt(Nt, dt)
     At   = build_At(Nt)
@@ -135,18 +140,8 @@ def build_all_operators(Nt: int, Nx: int, dt: float, dx: float, eps: float):
     Arho = build_Arho(Nt)
     Am   = build_Am(Nx)
 
-    It = sp.eye(Nt, format='csr')
-    Ix = sp.eye(Nx, format='csr')
+    return dict(Dt=Dt, At=At, Dx=Dx, Lx=Lx, Arho=Arho, Am=Am)
 
-    # Fokker-Planck blocks — time-slow (row-major) ordering:
-    #   vector index = i*Nx + j  (i=time, j=space)
-    # FP_rhobar acts on vec(rho_bar) with rho_bar shape (Nt-1, Nx)
-    # FP_b      acts on vec(b)       with b       shape (Nt,   Nx-1)
-    FP_rhobar = sp.kron(Dt, Ix, format='csr') - eps * sp.kron(At, Lx, format='csr')
-    FP_b      = sp.kron(It, Dx, format='csr')
-
-    return dict(Dt=Dt, At=At, Dx=Dx, Lx=Lx, Arho=Arho, Am=Am,
-                FP_rhobar=FP_rhobar, FP_b=FP_b)
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +160,13 @@ def build_rhs(rho0: np.ndarray, rho1: np.ndarray,
     For a stationary field rho_bar=c, b=0, D_t gives:
       row 0: +c/dt (only upper neighbour)  → d[0:Nx] = +rho0/dt
       row Nt-1: -c/dt (only lower neighb.) → d[-Nx:] = -rho1/dt
+
+    Note: A_t (shape Nt x Nt-1) acts only on interior rho_bar, so the
+    ghost-BC contributions 0.5*rho0 / 0.5*rho1 to the diffusion term at
+    the boundary rows are absent.  Adding them back (Crank-Nicolson BCs)
+    would require d[:Nx] += 0.5*eps*(Lx@rho0), but for the parameters
+    used here (eps*||Lx|| >> 1/dt) that term dominates and destabilises
+    the FP projection, so we keep the one-sided (implicit) treatment.
 
     Shape: (Nt * Nx,)
     """
@@ -234,19 +236,17 @@ def validate_operators(Nt: int = 6, Nx: int = 5, eps: float = 0.1):
         'Lx':   (Nx,   Nx),
         'Arho': (Nt-1, Nt),
         'Am':   (Nx-1, Nx),
-        'FP_rhobar': (Nt*Nx, (Nt-1)*Nx),
-        'FP_b':      (Nt*Nx, Nt*(Nx-1)),
     }
     for name, exp in expected.items():
         actual = ops[name].shape
         status = "OK" if actual == exp else f"MISMATCH (got {actual})"
         print(f"  {name:12s}: expected {exp}  {status}")
 
-    # Check Lx is positive semi-definite (L_x = D_x D_x^T = negative of Laplacian)
+    # Check Lx is positive semi-definite (Lx = Dx @ Dx.T ≈ −∂_xx, positive)
     Lx_dense = ops['Lx'].toarray()
     eigs = np.linalg.eigvalsh(Lx_dense)
     print(f"\n  L_x eigenvalues: min={eigs.min():.4f}, max={eigs.max():.4f}")
-    print(f"  (should be ≥ 0: L_x = D_x D_x^T is positive semi-definite)")
+    print(f"  (should be ≥ 0: L_x = D_x D_x^T is positive semi-definite,  Lx ≈ −∂_xx)")
 
     # Check RHS builder
     rho0 = np.ones(Nx) / (Nx * dx)

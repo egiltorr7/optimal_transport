@@ -61,10 +61,17 @@ def test_solve_phi():
 
     for eps in [0.0, 0.05, 0.1]:
         ops = build_all_operators(Nt, Nx, dt, dx, eps)
-        FP_r = ops['FP_rhobar']   # (Nt*Nx, (Nt-1)*Nx)
-        FP_b = ops['FP_b']        # (Nt*Nx, Nt*(Nx-1))
+        Dt = ops['Dt']; At = ops['At']; Dx = ops['Dx']; Lx = ops['Lx']
 
-        # Explicit M_SB
+        # Build FP_rhobar and FP_b explicitly using Kronecker products for the test.
+        # FP_rhobar = kron(Dt, Ix) + eps*kron(At, Lx)   (+eps: forward diffusion)
+        # FP_b      = kron(It, Dx)
+        Ix = sp.eye(Nx, format='csr')
+        It = sp.eye(Nt, format='csr')
+        FP_r = sp.kron(Dt, Ix) + eps * sp.kron(At, Lx)
+        FP_b = sp.kron(It, Dx)
+
+        # Explicit M_SB = FP_r @ FP_r.T + FP_b @ FP_b.T
         M_SB = FP_r @ FP_r.T + FP_b @ FP_b.T   # (Nt*Nx, Nt*Nx)
 
         # Check positive definiteness
@@ -73,15 +80,12 @@ def test_solve_phi():
         print(f"  eps={eps}: M_SB eig min={eigs.min():.4f}, max={eigs.max():.4f}")
 
         # Use a consistent RHS: pick random phi, compute F = M_SB @ phi
-        # (ensures F is in range(M_SB) so the system is solvable)
         np.random.seed(7)
         phi_true = np.random.randn(Nt * Nx)
-        # Remove null-space component (constant): phi_true -= mean
         phi_true -= phi_true.mean()
         F_vec = M_dense @ phi_true
         F_mat = F_vec.reshape(Nt, Nx)
 
-        # Our DCT/DST solver
         phi_our = solve_phi(F_mat, Nt, Nx, dt, dx, eps)
 
         resid = np.linalg.norm(M_dense @ phi_our.ravel() - F_vec) / np.linalg.norm(F_vec)
@@ -94,6 +98,15 @@ def test_solve_phi():
 # ============================================================
 # Test 3: project_C satisfies Fokker-Planck constraint
 # ============================================================
+def _fp_viol(rho_bar, b, ops, d, Nt, Nx, eps):
+    """Compute ||FP constraint residual|| using matrix ops (no Kronecker needed)."""
+    Dt = ops['Dt']; At = ops['At']; Dx = ops['Dx']; Lx = ops['Lx']
+    fp = (Dt @ rho_bar
+          + eps * (Lx @ (At @ rho_bar).T).T
+          + b @ Dx.T)
+    return np.linalg.norm(fp.ravel() - d)
+
+
 def test_project_C():
     print("=" * 55)
     print("Test: project_C satisfies FP constraint")
@@ -111,10 +124,7 @@ def test_project_C():
 
     rho_bar, b = project_C(p_rho, p_b, ops, d, Nt, Nx, dt, dx, eps)
 
-    # Check FP constraint
-    FP_r = ops['FP_rhobar']
-    FP_b = ops['FP_b']
-    viol = np.linalg.norm(FP_r @ rho_bar.ravel() + FP_b @ b.ravel() - d)
+    viol = _fp_viol(rho_bar, b, ops, d, Nt, Nx, eps)
     print(f"  FP constraint violation = {viol:.3e}  (want < 1e-8)")
     return viol < 1e-6
 
