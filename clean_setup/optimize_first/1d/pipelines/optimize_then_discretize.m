@@ -1,95 +1,72 @@
 function result = optimize_then_discretize(cfg, problem)
-% OPTIMIZE_THEN_DISCRETIZE  ADMM pipeline for 1D optimal transport.
+% OPTIMIZE_THEN_DISCRETIZE  ADMM pipeline for 1D optimal transport / SB.
 %
 %   result = optimize_then_discretize(cfg, problem)
 %
-%   Alternates between:
-%     1. Proximal step   (cfg.prox_ke)    -- minimizes kinetic energy
-%     2. Projection step (cfg.projection) -- enforces Fokker-Planck constraint
-%     3. Dual variable update
+%   Solves the consensus problem
 %
-%   The ADMM combination steps (adding/subtracting dual variables) are
-%   computed here in the pipeline. The prox and projection functions receive
-%   and return plain (rho, mx) pairs with no knowledge of the ADMM structure.
+%       min   KE(x) + I_FP(z)   s.t.   x = z
 %
-%   State struct fields:
-%     state.rho        (ntm x nx)  primal density
-%     state.mx         (nt  x nxm) primal momentum
-%     state.rho_tilde  (ntm x nx)  projected density
-%     state.bx         (nt  x nxm) projected momentum
-%     state.delta_rho  (ntm x nx)  dual variable for density
-%     state.delta_mx   (nt  x nxm) dual variable for momentum
+%   using admm_solve (over-relaxed ADMM, Fang et al. GADMM notation).
+%   The two proximal operators are:
+%
+%     prox_f = prox of kinetic energy KE     (cfg.prox_ke)
+%     prox_g = prox of Fokker-Planck indicator = orthogonal projection
+%              onto the FP constraint set     (cfg.projection)
+%
+%   Precomputes banded projection factors if cfg.projection is
+%   proj_fokker_planck_banded.
 
-    nt    = problem.nt;   ntm = nt - 1;
-    nx    = problem.nx;   nxm = nx - 1;
-    dt    = problem.dt;
-    dx    = problem.dx;
-    rho0  = problem.rho0;
-    rho1  = problem.rho1;
-    gamma = cfg.gamma;
-    sigma = 1 / gamma;
+    dt   = problem.dt;
+    dx   = problem.dx;
+    nt   = problem.nt;   ntm = nt - 1;
+    nx   = problem.nx;   nxm = nx - 1;
+    rho0 = problem.rho0;
+    rho1 = problem.rho1;
 
-    % Initial guess: linear interpolation in time
-    t  = linspace(0, 1, nt + 1)';
-    tt = t(2:end-1);  % (ntm x 1)
-
-    state.rho       = (1 - tt) .* rho0 + tt .* rho1;  % (ntm x nx)
-    state.mx        = zeros(nt, nxm);
-    state.rho_tilde = state.rho;
-    state.bx        = state.mx;
-    state.delta_rho = zeros(ntm, nx);
-    state.delta_mx  = zeros(nt, nxm);
-
-    % Precompute banded projection factors if needed
+    % Precompute banded projection factors if needed (once per run)
     if isequal(cfg.projection, @proj_fokker_planck_banded)
         problem.banded_proj = precomp_banded_proj(problem, cfg.vareps);
     end
 
-    residual = zeros(cfg.max_iter, 1);
+    % Initial guess: linear interpolation in time
+    t  = linspace(0, 1, nt + 1)';
+    tt = t(2:end-1);   % (ntm x 1)
 
-    tic;
-    for iter = 1:cfg.max_iter
+    x0.rho = (1 - tt) .* rho0 + tt .* rho1;   % (ntm x nx)
+    x0.mx  = zeros(nt, nxm);                   % (nt  x nxm)
 
-        rho_tilde_prev = state.rho_tilde;
-        bx_prev        = state.bx;
+    % Proximal operators as closures (capture problem and cfg)
+    prox_f = @(v, sigma) cfg.prox_ke(v, sigma, problem);
+    prox_g = @(v, sigma) cfg.projection(v, problem, cfg);
 
-        % Step 1: proximal update
-        %   prox input = projected variable + dual/gamma
-        prox_in.rho = state.rho_tilde + state.delta_rho ./ gamma;
-        prox_in.mx  = state.bx        + state.delta_mx  ./ gamma;
-        prox_out    = cfg.prox_ke(prox_in, sigma, problem);
-        state.rho   = prox_out.rho;
-        state.mx    = prox_out.mx;
+    % Weighted L2 norm for convergence check
+    norm_fn = @(v) sqrt(dt * dx * (sum(v.rho(:).^2) + sum(v.mx(:).^2)));
 
-        % Step 2: projection onto Fokker-Planck constraint
-        %   projection input = primal variable - dual/gamma
-        proj_in.rho     = state.rho - state.delta_rho ./ gamma;
-        proj_in.mx      = state.mx  - state.delta_mx  ./ gamma;
-        proj_out        = cfg.projection(proj_in, problem, cfg);
-        state.rho_tilde = proj_out.rho;
-        state.bx        = proj_out.mx;
+    % ADMM options
+    admm_opts.rho      = cfg.gamma;
+    admm_opts.alpha    = get_alpha(cfg);
+    admm_opts.max_iter = cfg.max_iter;
+    admm_opts.tol      = cfg.tol;
+    admm_opts.norm_fn  = norm_fn;
 
-        % Step 3: dual update
-        state.delta_rho = state.delta_rho - gamma .* (state.rho - state.rho_tilde);
-        state.delta_mx  = state.delta_mx  - gamma .* (state.mx  - state.bx);
+    % Solve
+    [x, ~, info] = admm_solve(prox_f, prox_g, x0, admm_opts);
 
-        % Residual: change in projected variables
-        drho = (state.rho_tilde - rho_tilde_prev).^2;
-        dmx  = (state.bx - bx_prev).^2;
-        residual(iter) = sqrt(dt * dx * (sum(drho(:)) + sum(dmx(:))));
+    result.rho      = x.rho;
+    result.mx       = x.mx;
+    result.residual = info.residual;
+    result.iters    = info.iters;
+    result.converged = info.converged;
+    result.error    = info.residual(end);
+    result.walltime = info.walltime;
+    result.cfg      = cfg;
+end
 
-        if residual(iter) < cfg.tol
-            residual = residual(1:iter);
-            break;
-        end
+function alpha = get_alpha(cfg)
+    if isfield(cfg, 'alpha')
+        alpha = cfg.alpha;
+    else
+        alpha = 1.0;   % standard ADMM
     end
-
-    result.rho       = state.rho;
-    result.mx        = state.mx;
-    result.residual  = residual;
-    result.iters     = length(residual);
-    result.converged = residual(end) < cfg.tol;
-    result.error     = residual(end);
-    result.walltime  = toc;
-    result.cfg       = cfg;
 end

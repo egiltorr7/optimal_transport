@@ -16,6 +16,7 @@ function cfg = cfg_staggered_gaussian()
 
     % ADMM parameters
     cfg.gamma    = 100;
+    cfg.alpha    = 1.0;     % over-relaxation (1 = standard ADMM, (1,2) = over-relaxed)
     cfg.vareps   = 1e-1;    % Schrodinger bridge regularization (0 = pure OT)
     cfg.max_iter = 20000;
     cfg.tol      = 1e-8;
