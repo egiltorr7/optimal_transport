@@ -8,14 +8,7 @@
 clear; clc;
 
 %% Add paths
-base = fileparts(mfilename('fullpath'));
-addpath(fullfile(base, 'config'));
-addpath(fullfile(base, 'problems'));
-addpath(fullfile(base, 'pipelines'));
-addpath(fullfile(base, 'discretization'));
-addpath(fullfile(base, 'projection'));
-addpath(fullfile(base, 'prox'));
-addpath(fullfile(base, 'utils'));
+run(fullfile(fileparts(mfilename('fullpath')), 'setup_paths.m'));
 
 %% Define experiments
 cfg = cfg_staggered_gaussian();

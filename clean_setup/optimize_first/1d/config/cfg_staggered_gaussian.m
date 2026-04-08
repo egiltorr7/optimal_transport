@@ -11,14 +11,14 @@ function cfg = cfg_staggered_gaussian()
     cfg.prox_ke    = @prox_ke_exact;
 
     % Grid
-    cfg.nt = 256;
+    cfg.nt = 128;
     cfg.nx = 128;
 
     % ADMM parameters
     cfg.gamma    = 100;
     cfg.alpha    = 1.0;     % over-relaxation (1 = standard ADMM, (1,2) = over-relaxed)
     cfg.vareps   = 1e-1;    % Schrodinger bridge regularization (0 = pure OT)
-    cfg.max_iter = 20000;
+    cfg.max_iter = 10000;
     cfg.tol      = 1e-8;
 
 end

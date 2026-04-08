@@ -14,12 +14,7 @@
 clear; clc;
 
 base = fileparts(mfilename('fullpath'));
-addpath(fullfile(base, '..'));
-addpath(fullfile(base, '..', 'config'));
-addpath(fullfile(base, '..', 'problems'));
-addpath(fullfile(base, '..', 'discretization'));
-addpath(fullfile(base, '..', 'projection'));
-addpath(fullfile(base, '..', 'utils'));
+run(fullfile(base, '..', 'setup_paths.m'));
 
 %% Build problem
 cfg      = cfg_staggered_gaussian();

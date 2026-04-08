@@ -1,0 +1,750 @@
+\documentclass[11pt]{article}
+
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{bm}
+
+\geometry{margin=1.25in}
+
+\newtheorem{remark}{Remark}
+\newtheorem{proposition}{Proposition}
+
+\title{%
+  A Discretize-First Linearized ADMM Solver\\
+  for the Dynamic Schr\"{o}dinger Bridge
+}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\bigskip
+
+%============================================================
+\section{Introduction}
+%============================================================
+
+This document describes the design and implementation of a 1D solver for the
+\emph{dynamic Schr\"{o}dinger Bridge} (SB) problem using a two-grid
+linearized Alternating Direction Method of Multipliers (ADMM).  Three
+intertwined design choices shape the entire solver:
+\begin{enumerate}
+  \item \textbf{Discretize first, then optimize.}  The continuous PDE
+        constraint is discretized on a grid before any optimality conditions
+        are derived.  ADMM is applied to the resulting finite-dimensional
+        problem.
+  \item \textbf{Two staggered grids.}  The objective and the constraint live
+        most naturally on different grids.  We maintain both explicitly and
+        couple them via interpolation operators inside ADMM.
+  \item \textbf{Implicit diffusion discretization.}  The diffusion term in
+        the Fokker-Planck constraint is treated implicitly, rendering the
+        scheme unconditionally stable and avoiding the parabolic CFL
+        restriction $\Delta t = O(\Delta x^2)$.
+\end{enumerate}
+Each choice is elaborated below after introducing the continuous problem.
+
+%============================================================
+\section{The Continuous Problem}
+%============================================================
+
+\subsection{Benamou--Brenier Optimal Transport}
+
+The \emph{Benamou--Brenier} (BB) formulation of optimal transport seeks a
+density--momentum pair $(\rho, m)$ on the space-time cylinder
+$(t,x) \in [0,1]^2$ that minimizes the kinetic energy
+\begin{equation}
+  J(\rho, m)
+  = \int_0^1 \int_0^1 \frac{1}{2}\,\frac{m(t,x)^2}{\rho(t,x)}\,dx\,dt
+  \label{eq:BB_objective}
+\end{equation}
+subject to the continuity equation with prescribed marginals,
+\begin{equation}
+  \partial_t \rho + \partial_x m = 0,
+  \qquad
+  \rho(0,\cdot) = \rho_0,\quad
+  \rho(1,\cdot) = \rho_1,\quad
+  \partial_x \rho\big|_{x=0,1} = 0.
+  \label{eq:continuity}
+\end{equation}
+The integrand $m^2/(2\rho)$ is the kinetic energy density of a fluid with
+density $\rho$ and momentum $m = \rho v$ where $v$ is the velocity field.
+
+\subsection{The Schr\"{o}dinger Bridge}
+
+Adding entropy regularization replaces the continuity equation with the
+\emph{Fokker--Planck equation},
+\begin{equation}
+  \partial_t \rho + \partial_x m = \varepsilon\,\partial_{xx}\rho,
+  \qquad
+  \rho(0,\cdot) = \rho_0,\quad \rho(1,\cdot) = \rho_1,
+  \label{eq:FP}
+\end{equation}
+with the same objective~\eqref{eq:BB_objective}.  The parameter
+$\varepsilon \geq 0$ controls the strength of diffusion:
+\begin{itemize}
+  \item $\varepsilon = 0$: recovers the pure OT (Benamou--Brenier) problem.
+  \item $\varepsilon > 0$: the Schr\"{o}dinger Bridge; paths are smoother
+        and more diffuse, corresponding to the most likely trajectory of
+        $N$ Brownian particles conditioned on their initial and final
+        empirical distributions.
+\end{itemize}
+The term $m = \rho v$ retains its role as the momentum, but $v$ is now a
+drift that guides the diffusive particles.
+
+%============================================================
+\section{Discretize First, Then Optimize}
+%============================================================
+
+\subsection{Two Philosophies}
+
+A PDE-constrained optimization problem can be attacked in two orders:
+
+\begin{description}
+  \item[Optimize-then-discretize (OtD):]
+    Derive the infinite-dimensional optimality conditions (Hamilton--Jacobi--Bellman
+    equation, adjoint system, etc.) and only then discretize those PDEs for
+    numerical solution.  The resulting scheme is often non-trivially coupled
+    and requires careful adjoint consistency.
+
+  \item[Discretize-then-optimize (DtO):]
+    Directly discretize the state equation and the objective on a grid,
+    producing a finite-dimensional constrained optimization problem.  An
+    off-the-shelf algorithm (here ADMM) is then applied to this discrete
+    problem.
+\end{description}
+
+We adopt the \textbf{DtO} approach.  The advantages in this context are:
+\begin{itemize}
+  \item ADMM's convergence guarantees apply to the finite-dimensional problem
+        without needing to track consistency of an adjoint PDE discretization.
+  \item The prox and projection sub-steps are posed on a fixed grid and can
+        be computed exactly or near-exactly at each iteration.
+  \item The implicit diffusion treatment (Section~\ref{sec:implicit}) emerges
+        naturally from the grid formulation rather than requiring separate
+        analysis at the continuous level.
+\end{itemize}
+
+\subsection{The Discrete Problem}
+
+Let $N_t$ and $N_x$ be the numbers of time and space cells, with
+$\Delta t = 1/N_t$ and $\Delta x = 1/N_x$.  Cell centers are at
+$(t_{i+1/2}, x_{j+1/2})$ and cell edges (faces) are at integer nodes.
+
+We discretize $(\rho, m)$ on a space-time grid and require the discrete
+analogue of~\eqref{eq:FP} to hold at every grid point.  The objective is
+replaced by
+\begin{equation}
+  J_h(\rho, m)
+  = \Delta t\,\Delta x \sum_{i,j} \frac{m_{ij}^2}{2\,\rho_{ij}},
+  \label{eq:discrete_obj}
+\end{equation}
+with $J_h = +\infty$ whenever any $\rho_{ij} \leq 0$.
+
+%============================================================
+\section{Two Grids and Why We Need Them}
+%============================================================
+
+\subsection{Motivation: Conflicting Requirements}
+
+The objective~\eqref{eq:discrete_obj} requires $\rho$ and $m$ to live at
+the \emph{same} spatial and temporal locations, so their ratio $m^2/\rho$
+can be formed pointwise.
+
+The Fokker--Planck equation, on the other hand, is a conservation law of the
+form $\partial_t\rho + \partial_x m = \varepsilon\partial_{xx}\rho$.  A
+\emph{conservative} finite-difference discretization naturally lives on a
+staggered grid: the density $\rho$ at cell centers, the flux $m$ at cell
+faces.  Using the same collocated grid for both $\rho$ and $m$ in the
+constraint produces a checkerboard-mode instability and requires artificial
+stabilization.
+
+These two requirements are in tension:
+\begin{itemize}
+  \item \textbf{Objective}: $\rho$ and $m$ collocated at cell centers.
+  \item \textbf{Constraint}: $\rho$ at integer time nodes $\times$ cell
+        centers, $m$ at half-integer times $\times$ cell faces.
+\end{itemize}
+
+\subsection{Grid Definitions}
+
+We therefore maintain \emph{two} sets of variables:
+
+\paragraph{Grid 1 (collocated), variables $(\rho, m)$:}
+Both live at space-time cell centers $(t_{i+1/2}, x_{j+1/2})$.
+\begin{align*}
+  \rho_{ij} &\approx \rho(t_{i+1/2},\, x_{j+1/2}), \quad
+    \text{shape } N_t \times N_x,\\
+  m_{ij}    &\approx m(t_{i+1/2},\, x_{j+1/2}), \quad
+    \text{shape } N_t \times N_x.
+\end{align*}
+
+\paragraph{Grid 2 (staggered), variables $(\bar\rho, b)$:}
+Density at integer times, flux at spatial faces.
+\begin{align*}
+  \bar\rho_{ij} &\approx \rho(t_i,\, x_{j+1/2}),\quad
+    \text{shape } (N_t-1) \times N_x
+    \quad\text{(interior time nodes; BCs absorbed into } d\text{)},\\
+  b_{ij}        &\approx m(t_{i+1/2},\, x_j),\quad
+    \text{shape } N_t \times (N_x - 1)
+    \quad\text{(interior faces; Neumann BCs enforced)}.
+\end{align*}
+The boundary values $\bar\rho^0 = \rho_0$ and $\bar\rho^{N_t} = \rho_1$ are
+not stored as unknowns; they appear on the right-hand side of the constraint.
+
+\subsection{Interpolation Operators}
+
+The two grids are linked by averaging operators:
+\begin{align}
+  (A_\rho\,\rho)_i     &= \tfrac{1}{2}(\rho_i + \rho_{i+1}), \quad
+    i = 0,\ldots,N_t-2,
+    \label{eq:Arho}\\
+  (A_m\, m)_j          &= \tfrac{1}{2}(m_j + m_{j+1}), \quad
+    j = 0,\ldots,N_x-2.
+    \label{eq:Am}
+\end{align}
+Stacking these, the interpolation from Grid 1 to Grid 2 is written
+$A(\rho,m) = (A_\rho\,\rho,\; A_m\,m)$.
+
+\subsection{The ADMM Splitting}
+
+ADMM splits the problem by introducing duplicates:
+\begin{equation}
+  \min_{(\rho,m),\,(\bar\rho,b)}
+  J_h(\rho, m) + \iota_C(\bar\rho, b),
+  \qquad
+  \text{subject to}\quad
+  A(\rho, m) = (\bar\rho, b),
+  \label{eq:split}
+\end{equation}
+where $\iota_C$ is the indicator of the Fokker--Planck constraint set
+\begin{equation}
+  C = \bigl\{(\bar\rho, b) \mid
+    (I_x \otimes D_t - \varepsilon L_x \otimes A_t)\bar\rho
+    + (D_x \otimes I_t)\,b = d\bigr\}.
+  \label{eq:C}
+\end{equation}
+Each sub-problem is now tractable:
+\begin{itemize}
+  \item The $(\rho, m)$-step minimizes $J_h$ plus a quadratic penalty and
+        decouples pointwise.
+  \item The $(\bar\rho, b)$-step is a projection onto the affine constraint
+        set $C$, which reduces to solving a single linear system.
+\end{itemize}
+
+%============================================================
+\section{Linearized ADMM}
+%============================================================
+
+\subsection{Why Linearization is Necessary}
+
+Standard (non-linearized) ADMM requires solving
+\begin{equation}
+  (\rho^{k+1}, m^{k+1})
+  = \arg\min_{\rho,m}
+    J_h(\rho,m)
+    + \frac{\gamma}{2}\|A(\rho,m) - (\bar\rho^k, b^k) + \delta^k/\gamma\|^2.
+  \label{eq:standard_admm}
+\end{equation}
+Because $A$ mixes neighboring values of $\rho$ in time and neighboring values
+of $m$ in space, this is a \emph{coupled} minimization over the entire grid;
+the quadratic term in~\eqref{eq:standard_admm} cannot be solved pointwise.
+
+\subsection{The Linearization}
+
+Linearized ADMM replaces the $A(\rho,m)$ term inside the penalty with a
+first-order Taylor expansion around the current iterate, adding a proximal
+term with parameter $\tau > 0$:
+\begin{equation}
+  (\rho^{k+1}, m^{k+1})
+  = \operatorname{prox}_{J_h/\tau}\!\left(
+      (\rho^k, m^k) - \frac{\gamma}{\tau}A^\top
+      \!\left(A(\rho^k,m^k) - (\bar\rho^k, b^k) + \frac{\delta^k}{\gamma}
+      \right)
+    \right).
+  \label{eq:linearized_step1}
+\end{equation}
+The argument to the proximal operator is an explicit function of the current
+iterate, so no coupled solve is needed.  The proximal operator itself
+decouples pointwise (see Section~\ref{sec:prox}).
+
+\begin{remark}
+  The stability condition for linearized ADMM is $\tau > \gamma\|A\|^2$.
+  Since $A_\rho$ and $A_m$ are averaging operators, $\|A\|^2 \leq 1$, so
+  $\tau = 5\gamma$ is a safe, practical choice.
+\end{remark}
+
+\subsection{The Three ADMM Steps}
+
+Let $\delta = (\delta_{\bar\rho}, \delta_b)$ be the dual variable (Lagrange
+multiplier for the ADMM constraint).
+
+\paragraph{Step 1 --- $(\rho,m)$ proximal update.}
+Compute the residual
+$r = A(\rho^k,m^k) - (\bar\rho^k, b^k) + \delta^k/\gamma$,
+form the gradient step
+\begin{equation}
+  u = \rho^k - \frac{\gamma}{\tau}A_\rho^\top r_{\bar\rho}, \qquad
+  v = m^k   - \frac{\gamma}{\tau}A_m^\top r_b,
+\end{equation}
+and then compute $(\rho^{k+1}, m^{k+1}) = \operatorname{prox}_{J_h/\tau}(u, v)$
+pointwise (Section~\ref{sec:prox}).
+
+\paragraph{Step 2 --- $(\bar\rho, b)$ projection update.}
+With over-relaxation parameter $\alpha \in (1,2)$:
+\begin{equation}
+  (\bar\rho^{k+1}, b^{k+1})
+  = \operatorname{proj}_C\!\left(
+      \alpha\,A(\rho^{k+1},m^{k+1}) + (1-\alpha)(\bar\rho^k,b^k)
+      + \delta^k/\gamma
+    \right).
+\end{equation}
+The projection solves a structured linear system (Section~\ref{sec:projection}).
+
+\paragraph{Step 3 --- Dual update.}
+\begin{equation}
+  \delta^{k+1}
+  = \delta^k + \gamma\bigl(
+      \alpha\,A(\rho^{k+1},m^{k+1}) + (1-\alpha)(\bar\rho^k,b^k)
+      - (\bar\rho^{k+1}, b^{k+1})
+    \bigr).
+\end{equation}
+
+%============================================================
+\section{Pointwise Proximal Operator}\label{sec:prox}
+%============================================================
+
+For each cell $(i,j)$, the proximal sub-problem is
+\begin{equation}
+  (\rho^*, m^*)
+  = \arg\min_{\rho \geq 0,\, m}
+    \frac{\Delta t\,\Delta x}{2\tau}\,\frac{m^2}{\rho}
+    + \frac{1}{2}(\rho - u)^2 + \frac{1}{2}(m - v)^2.
+  \label{eq:prox_problem}
+\end{equation}
+Setting $w = \Delta t\,\Delta x$, optimality in $m$ gives
+\begin{equation}
+  m^* = \frac{\tau\,\rho^*\,v}{\tau\,\rho^* + w/2}.
+  \label{eq:mstar}
+\end{equation}
+Substituting back into~\eqref{eq:prox_problem} and differentiating with
+respect to $\rho$ yields a \emph{cubic equation}:
+\begin{equation}
+  \tau^2 \rho^3
+  - \tau^2 u\,\rho^2
+  + \tau\!\left(w - \frac{w}{2}\right)\!(2w - u\,\tau)\,\rho
+  - uw^2/4
+  - \tfrac{w\tau}{2}\,v^2/4 = 0.
+  \label{eq:cubic}
+\end{equation}
+More precisely, the coefficients are
+\begin{equation}
+  a_3 = \tau^2, \quad
+  a_2 = \tau(2w - u\tau), \quad
+  a_1 = w(w - 2u\tau), \quad
+  a_0 = -uw^2 - \tfrac{w\tau}{2}\,v^2.
+\end{equation}
+We take the \textbf{largest real root} $\rho^* > 0$ (following Papadakis
+et al.\ 2014).  If $u \leq 0$ we set $\rho^* = 0$, $m^* = 0$, since the
+domain of $J_h$ requires $\rho > 0$.  A small positivity floor
+$\rho^* \leftarrow \max(\rho^*, 10^{-10})$ is applied after the solve to
+prevent division by zero in subsequent iterations.
+
+The cubic is solved analytically (Cardano's method) in fully vectorized
+NumPy code, so there are no Python loops over grid points.
+
+%============================================================
+\section{Implicit Diffusion and the CFL Constraint}\label{sec:implicit}
+%============================================================
+
+\subsection{The Parabolic CFL Condition}
+
+An \emph{explicit} (forward-Euler) discretization of the diffusion term
+$\varepsilon\,\partial_{xx}\rho$ would give
+\[
+  \frac{\bar\rho^{n+1} - \bar\rho^n}{\Delta t}
+  = \frac{\varepsilon}{\Delta x^2}(\bar\rho^n_{j+1} - 2\bar\rho^n_j + \bar\rho^n_{j-1}).
+\]
+Von Neumann stability analysis requires the \emph{parabolic Courant number}
+$\mu = \varepsilon\Delta t/\Delta x^2 \leq 1/2$.  For fixed spatial
+resolution $N_x$ this imposes
+\begin{equation}
+  \Delta t \leq \frac{\Delta x^2}{2\varepsilon}
+  = \frac{1}{2\varepsilon N_x^2}.
+  \label{eq:CFL}
+\end{equation}
+For the parameters $N_x = 128$, $\varepsilon = 0.05$ this gives
+$\Delta t \leq 6\times10^{-4}$, requiring $N_t \geq 1670$ time steps.
+
+\subsection{Our Implicit Treatment}
+
+The Fokker--Planck constraint~\eqref{eq:FP} is discretized as
+\begin{equation}
+  (I_x \otimes D_t - \varepsilon L_x \otimes A_t)\,\bar\rho
+  + (D_x \otimes I_t)\,b = d,
+  \label{eq:discrete_FP}
+\end{equation}
+where:
+\begin{itemize}
+  \item $D_t$ (shape $N_t \times (N_t-1)$) is the first-difference operator
+        in time, corresponding to the time derivative $\partial_t\rho$.
+  \item $A_t$ (shape $N_t \times (N_t-1)$) is the time-averaging operator.
+        The diffusion term is evaluated at the \emph{average} of the
+        density at adjacent integer-time nodes: this is an
+        \textbf{implicit/semi-implicit (Crank-Nicolson-like) scheme}.
+  \item $L_x = D_x D_x^\top$ is the negative Neumann Laplacian
+        ($L_x \approx -\partial_{xx}$, positive semi-definite), so
+        $+\varepsilon L_x$ correctly represents forward diffusion.
+  \item $D_x \otimes I_t$ is the spatial divergence of the flux $b$.
+\end{itemize}
+
+Because $A_t$ averages between two adjacent time levels, the diffusion term
+involves $\bar\rho$ at both $t_i$ and $t_{i+1}$.  This is equivalent to an
+implicit treatment of the diffusion, making the scheme
+\textbf{unconditionally stable} with respect to the diffusion coefficient.
+There is no restriction of the form~\eqref{eq:CFL}.
+
+\subsection{Stiffness Ratio}
+
+A useful diagnostic is the \emph{stiffness ratio}
+\begin{equation}
+  \mu_h = \frac{\varepsilon}{\Delta x^2 / \Delta t}
+        = \frac{\varepsilon N_x^2}{N_t}.
+  \label{eq:stiffness}
+\end{equation}
+When $\mu_h \gg 1$ the scheme is operating far outside the explicit stability
+region, yet convergence is maintained because the implicit diffusion enters
+the Fokker--Planck constraint solve (Step 2 of ADMM) rather than the time
+integration.  In practice, values of $\mu_h$ up to $\sim 10$ are handled
+without difficulty.
+
+\begin{remark}
+  The advective CFL $|v|\Delta t/\Delta x \leq 1$ does not appear explicitly
+  because the velocity $v = m/\rho$ is not discretized directly.  Instead,
+  $m$ is the independent variable and the kinetic energy $m^2/(2\rho)$ is
+  minimized directly.
+\end{remark}
+
+%============================================================
+\section{The Projection Step}\label{sec:projection}
+%============================================================
+
+\subsection{KKT System}
+
+The projection
+$(\bar\rho^{k+1}, b^{k+1}) = \operatorname{proj}_C(p_{\bar\rho}, p_b)$
+is the nearest point in $C$ to $(p_{\bar\rho}, p_b)$.  By KKT conditions,
+the solution satisfies
+\begin{align}
+  \bar\rho^{k+1} &= p_{\bar\rho}
+    - (I_x \otimes D_t - \varepsilon L_x \otimes A_t)^\top \phi,
+    \label{eq:KKT_rhobar}\\
+  b^{k+1} &= p_b - (D_x \otimes I_t)^\top \phi
+  \label{eq:KKT_b}
+\end{align}
+where the multiplier $\phi \in \mathbb{R}^{N_t \times N_x}$ solves the
+normal equations
+\begin{equation}
+  M_{\mathrm{SB}}\,\phi = F,
+  \label{eq:MSB_system}
+\end{equation}
+with right-hand side
+$F = (I_x \otimes D_t - \varepsilon L_x \otimes A_t)\,p_{\bar\rho}
+    + (D_x \otimes I_t)\,p_b - d$,
+and the symmetric positive semi-definite operator
+\begin{align}
+  M_{\mathrm{SB}}
+  &= (I_x \otimes D_t - \varepsilon L_x \otimes A_t)
+     (I_x \otimes D_t - \varepsilon L_x \otimes A_t)^\top
+   + (D_x \otimes I_t)(D_x \otimes I_t)^\top \nonumber\\
+  &= I_x \otimes D_t D_t^\top
+   - \varepsilon L_x \otimes (A_t D_t^\top + D_t A_t^\top)
+   + \varepsilon^2 L_x^2 \otimes A_t A_t^\top
+   + D_x D_x^\top \otimes I_t.
+  \label{eq:MSB}
+\end{align}
+A direct assembly and factorization of $M_{\mathrm{SB}}$ would cost
+$O(N_t^3 N_x^3)$.  We exploit its tensor-product structure for an
+$O(N_x N_t \log N_t)$ solve.
+
+\subsection{Efficient Solver via DCT and Tridiagonal Systems}
+
+The key observation is that $L_x = D_x D_x^\top$ is \emph{diagonalized by
+the DCT-II basis} (Neumann boundary conditions).  Applying DCT-II in space
+decouples~\eqref{eq:MSB_system} into $N_x$ independent $N_t \times N_t$
+tridiagonal systems, one per spatial mode $k = 0, \ldots, N_x - 1$:
+\begin{equation}
+  T^k \hat\phi_k = \hat F_k,
+  \label{eq:tridiag}
+\end{equation}
+where $\hat F_k$ is the $k$-th DCT-II mode of $F$ and
+$T^k$ is a symmetric tridiagonal matrix with entries
+\begin{align}
+  \text{main diagonal (interior):} &\quad
+    \alpha = \frac{2}{\Delta t^2} + \frac{\varepsilon^2 \lambda_k^2}{2} + \lambda_k,\\
+  \text{off-diagonal:} &\quad
+    \beta  = -\frac{1}{\Delta t^2} + \frac{\varepsilon^2 \lambda_k^2}{4},\\
+  \text{corner $(0,0)$:} &\quad
+    \frac{1}{\Delta t^2} + \frac{\varepsilon\lambda_k}{\Delta t}
+    + \frac{\varepsilon^2\lambda_k^2}{4} + \lambda_k,\\
+  \text{corner $(N_t{-}1, N_t{-}1)$:} &\quad
+    \frac{1}{\Delta t^2} - \frac{\varepsilon\lambda_k}{\Delta t}
+    + \frac{\varepsilon^2\lambda_k^2}{4} + \lambda_k,
+\end{align}
+where $\lambda_k = \frac{2}{\Delta x^2}(1 - \cos(\pi k/N_x)) \geq 0$ is
+the $k$-th eigenvalue of $L_x$.
+
+For $k > 0$ (where $\lambda_k > 0$), $T^k$ is strictly positive definite
+and is solved with SciPy's $O(N_t)$ banded solver.  For $k = 0$
+(the zero-mode of $L_x$), $T^0 = D_t D_t^\top$ is the Neumann Laplacian
+in time, which is singular; the right-hand side is guaranteed to be
+consistent by mass conservation, and the minimum-norm (mean-zero) solution
+is returned.
+
+\paragraph{Computational cost.}
+The DCT-II transform costs $O(N_x N_t \log N_x)$.  Each of the $N_x$
+tridiagonal solves costs $O(N_t)$.  The inverse DCT-II costs
+$O(N_x N_t \log N_x)$.  The total is
+$O(N_x N_t (\log N_x + 1))$, which is essentially linear in the problem
+size $N_x N_t$.
+
+%============================================================
+\section{Discrete Operators in Detail}
+%============================================================
+
+\subsection{Notation and Ordering}
+
+All 2D arrays use the convention: \textbf{time is the slow index} (row
+index) and \textbf{space is the fast index} (column index).  Kronecker
+products are written with the time factor first:
+$B_t \otimes B_x$ acts on a vector with time-slow ordering.
+
+\subsection{One-Dimensional Operators}
+
+Table~\ref{tab:operators} summarizes the 1D building blocks.
+
+\begin{table}[h]
+\centering
+\caption{One-dimensional discrete operators.}
+\label{tab:operators}
+\begin{tabular}{llll}
+\toprule
+Symbol & Shape & Action & Notes \\
+\midrule
+$D_t$ & $N_t \times (N_t-1)$ & Time first-difference & BCs in $d$ \\
+$A_t$ & $N_t \times (N_t-1)$ & Time averaging & Semi-implicit diffusion \\
+$D_x$ & $N_x \times (N_x-1)$ & Space first-difference & Interior faces only \\
+$L_x = D_x D_x^\top$ & $N_x \times N_x$ & Neumann Laplacian & $L_x \approx -\partial_{xx}$ \\
+$A_\rho$ & $(N_t-1) \times N_t$ & Time avg: Grid~1$\to$Grid~2 & \eqref{eq:Arho} \\
+$A_m$   & $(N_x-1) \times N_x$ & Space avg: Grid~1$\to$Grid~2 & \eqref{eq:Am} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For $N_t = 4$ the time operators are (after scaling by $\Delta t$):
+\[
+  D_t = \frac{1}{\Delta t}\begin{pmatrix}
+    1 &  0 &  0 \\
+   -1 &  1 &  0 \\
+    0 & -1 &  1 \\
+    0 &  0 & -1
+  \end{pmatrix},
+  \qquad
+  A_t = \frac{1}{2}\begin{pmatrix}
+    1 & 0 & 0 \\
+    1 & 1 & 0 \\
+    0 & 1 & 1 \\
+    0 & 0 & 1
+  \end{pmatrix}.
+\]
+
+\subsection{Right-Hand Side Vector $d$}
+
+The boundary conditions $\rho(0,\cdot) = \rho_0$, $\rho(1,\cdot) = \rho_1$
+are absorbed into the right-hand side:
+\begin{equation}
+  d = \frac{1}{\Delta t}
+  \begin{pmatrix} \rho_0 \\ 0 \\ \vdots \\ 0 \\ -\rho_1 \end{pmatrix},
+  \label{eq:rhs}
+\end{equation}
+with $d \in \mathbb{R}^{N_t \times N_x}$ (time-slow ordering).  The
+factor $1/\Delta t$ comes from the first-difference operator $D_t$ acting
+on a constant vector.
+
+%============================================================
+\section{Algorithm Summary}
+%============================================================
+
+\begin{algorithm}[h]
+\caption{Two-grid Linearized ADMM for the Schr\"{o}dinger Bridge}
+\label{alg:admm}
+\begin{algorithmic}[1]
+\Require $\rho_0$, $\rho_1$: boundary densities; $N_t$, $N_x$, $\varepsilon$, $\gamma$, $\tau$, $\alpha$
+\State Build operators $D_t$, $A_t$, $D_x$, $L_x$, $A_\rho$, $A_m$ and RHS $d$
+\State Initialize $\rho$ by center-of-mass displacement interpolation of $\rho_0$
+\State $m \leftarrow (\mu_1-\mu_0)\,\rho$ \quad (constant-velocity momentum)
+\State $\bar\rho \leftarrow A_\rho\,\rho$, \quad $b \leftarrow A_m\,m$, \quad $\delta_{\bar\rho} \leftarrow 0$, \quad $\delta_b \leftarrow 0$
+\For{$k = 1, 2, \ldots$}
+  \State \textbf{Step 1: Proximal update}
+  \State $r_{\bar\rho} \leftarrow A_\rho\rho - \bar\rho + \delta_{\bar\rho}/\gamma$, \quad $r_b \leftarrow A_m m - b + \delta_b/\gamma$
+  \State $u \leftarrow \rho - (\gamma/\tau)\,A_\rho^\top r_{\bar\rho}$, \quad $v \leftarrow m - (\gamma/\tau)\,A_m^\top r_b$
+  \State $(\rho, m) \leftarrow \operatorname{prox}_{J_h/\tau}(u, v)$ \quad (pointwise cubic solve, \S\ref{sec:prox})
+  \State \textbf{Step 2: Projection update (with over-relaxation)}
+  \State $p_{\bar\rho} \leftarrow \alpha A_\rho\rho + (1-\alpha)\bar\rho + \delta_{\bar\rho}/\gamma$
+  \State $p_b \leftarrow \alpha A_m m + (1-\alpha) b + \delta_b/\gamma$
+  \State $(\bar\rho, b) \leftarrow \operatorname{proj}_C(p_{\bar\rho}, p_b)$ \quad (DCT + tridiagonal solve, \S\ref{sec:projection})
+  \State \textbf{Step 3: Dual update}
+  \State $\delta_{\bar\rho} \leftarrow \delta_{\bar\rho} + \gamma(p_{\bar\rho} - \bar\rho)$, \quad $\delta_b \leftarrow \delta_b + \gamma(p_b - b)$
+  \State Check primal/dual residuals; break if $< \texttt{tol}$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+%============================================================
+\section{Convergence Diagnostics}
+%============================================================
+
+At each iteration we track:
+\begin{enumerate}
+  \item \textbf{Primal residual} (normalized):
+    $r_p = \|A(\rho^k,m^k) - (\bar\rho^k,b^k)\| / \sqrt{N_{\mathrm{primal}}}$
+  \item \textbf{Dual residual} (normalized):
+    $r_d = \gamma\,\|A^\top((\bar\rho^k,b^k) - (\bar\rho^{k-1},b^{k-1}))\| / \sqrt{N_{\mathrm{dual}}}$
+  \item \textbf{Objective value}:
+    $J_h(\rho^k, m^k) = \Delta t\,\Delta x\sum_{ij} m_{ij}^2/(2\rho_{ij})$
+  \item \textbf{Fokker--Planck violation}:
+    $\|(I_x \otimes D_t - \varepsilon L_x \otimes A_t)\bar\rho^k
+       + (D_x \otimes I_t)b^k - d\|$
+\end{enumerate}
+Convergence is declared when $r_p < \texttt{tol}$ (default $10^{-4}$).
+The FP violation is an independent check that the projection is working
+correctly; it should be near machine precision at every iteration.
+
+%============================================================
+\section{Connection to the Literature}
+%============================================================
+
+This formulation follows the line of work by Benamou and Brenier (2000)
+who introduced the dynamic OT problem~\eqref{eq:BB_objective}--\eqref{eq:continuity},
+and the ADMM discretization approach of Papadakis, Peyr\'{e}, and Oudet (2014)
+who developed the proximal splitting on two grids for the OT case ($\varepsilon=0$).
+
+The extension to $\varepsilon > 0$ (Schr\"{o}dinger Bridge) adds the
+diffusion term $\varepsilon L_x \otimes A_t$ to the Fokker--Planck constraint
+and modifies the $M_{\mathrm{SB}}$ operator accordingly.  The semi-implicit
+treatment of this term via $A_t$ (averaging in time) is the key stability
+contribution: it is the discrete analogue of the Crank--Nicolson scheme for
+the heat equation but embedded inside the ADMM projection step rather than
+an explicit time-stepper.
+
+For Gaussian boundary conditions, the exact SB path has an analytic formula:
+$\rho(t,\cdot) = \mathcal{N}(\mu(t), \sigma^2(t))$ where $\mu(t)$ is linear
+in $t$ and $\sigma^2(t)$ follows from the cross-covariance
+$c = -\varepsilon T + \sqrt{(\varepsilon T)^2 + \sigma_0^2\sigma_1^2}$.
+This provides a ground-truth comparison for the numerical solver.
+
+%============================================================
+\section{Parameters and Test Cases}
+%============================================================
+
+\subsection{Recommended Parameters}
+
+\begin{table}[h]
+\centering
+\caption{Recommended parameter settings.}
+\begin{tabular}{lll}
+\toprule
+Parameter & Default & Notes \\
+\midrule
+$N_t$ & 64 & Time cells \\
+$N_x$ & 128 & Space cells \\
+$\varepsilon$ & $0$--$0.05$ & $0$ = pure OT \\
+$\gamma$ & 1.0 & ADMM penalty \\
+$\tau$   & 5.0 & Proximal parameter; need $\tau > \gamma\|A\|^2 \approx \gamma$ \\
+$\alpha$ & 1.5 & Over-relaxation (Boyd et al.\ 2011) \\
+Tolerance & $10^{-4}$ & On normalized primal residual \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Test Cases}
+
+\paragraph{Test 1 --- Gaussian $\to$ Gaussian, $\varepsilon = 0$ (OT):}
+$\rho_0 = \mathcal{N}(0.25, 0.05^2)$, $\rho_1 = \mathcal{N}(0.75, 0.05^2)$.
+Expected objective: $J^* = \frac{1}{2}(0.75 - 0.25)^2 = 0.125$.
+The density evolves as a linear displacement interpolation.
+
+\paragraph{Test 2 --- Same marginals, $\varepsilon = 0.05$ (SB):}
+Expect smoother, wider paths; $J_{\mathrm{SB}} > J_{\mathrm{OT}}$ due to
+the entropic cost.  Comparison against the analytic Gaussian formula
+validates the solver.
+
+\paragraph{Test 3 --- Two humps $\to$ one hump:}
+$\rho_0 = \frac{1}{2}\mathcal{N}(0.25,0.05^2) + \frac{1}{2}\mathcal{N}(0.75,0.05^2)$,
+$\rho_1 = \mathcal{N}(0.5, 0.1^2)$.
+Tests behavior with bimodal initial data.
+
+%============================================================
+\appendix
+\section{Why Not Discretize the HJB Equation?}
+%============================================================
+
+An alternative approach is to derive the optimality conditions of the
+continuous problem first.  The Pontryagin maximum principle yields a coupled
+system of a forward Fokker--Planck equation for $\rho$ and a backward
+Hamilton--Jacobi equation for the value function $\phi$, linked through the
+optimal velocity $v^* = \partial_x \phi$.  This \emph{Schr\"{o}dinger system}
+can be solved iteratively (e.g., Sinkhorn-like fixed-point iterations in the
+static setting).
+
+The DtO approach chosen here has several practical advantages over this route:
+\begin{enumerate}
+  \item \textbf{No adjoint PDE.}  The ADMM objective encodes the constraints
+        implicitly; there is no backward PDE to discretize consistently.
+  \item \textbf{Arbitrary boundary conditions.}  Periodic, Neumann, and
+        Dirichlet boundary conditions are handled identically by replacing
+        the operators $D_t$, $D_x$, $L_x$ without changing the algorithm.
+  \item \textbf{Direct access to $(\rho, m)$.}  The primal variables are
+        the physically meaningful density and momentum, not potentials.
+        Positivity of $\rho$ is enforced at every iteration via the proximal
+        operator.
+  \item \textbf{No CFL constraint.}  As explained in Section~\ref{sec:implicit},
+        the implicit diffusion in the projection step sidesteps the parabolic
+        stability restriction entirely.
+\end{enumerate}
+
+%============================================================
+\begin{thebibliography}{9}
+%============================================================
+
+\bibitem{BB2000}
+  J.-D.\ Benamou and Y.\ Brenier,
+  ``A computational fluid mechanics solution to the Monge-Kantorovich
+  mass transfer problem,''
+  \textit{Numerische Mathematik}, 84(3):375--393, 2000.
+
+\bibitem{Papadakis2014}
+  N.\ Papadakis, G.\ Peyr\'{e}, and E.\ Oudet,
+  ``Optimal transport with proximal splitting,''
+  \textit{SIAM Journal on Imaging Sciences}, 7(1):212--238, 2014.
+
+\bibitem{Boyd2011}
+  S.\ Boyd, N.\ Parikh, E.\ Chu, B.\ Peleato, and J.\ Eckstein,
+  ``Distributed optimization and statistical learning via the alternating
+  direction method of multipliers,''
+  \textit{Foundations and Trends in Machine Learning}, 3(1):1--122, 2011.
+
+\bibitem{Leonard2014}
+  C.\ L\'{e}onard,
+  ``A survey of the Schr\"{o}dinger problem and some of its connections
+  with optimal transport,''
+  \textit{Discrete and Continuous Dynamical Systems}, 34(4):1533--1574, 2014.
+
+\end{thebibliography}
+
+\end{document}

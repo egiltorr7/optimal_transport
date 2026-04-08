@@ -14,11 +14,7 @@ clear; clc;
 
 % Add paths (run from tests/ or from 1d/)
 base = fileparts(mfilename('fullpath'));
-addpath(fullfile(base, '..'));               % setup_problem.m
-addpath(fullfile(base, '..', 'config'));
-addpath(fullfile(base, '..', 'problems'));
-addpath(fullfile(base, '..', 'discretization'));
-addpath(fullfile(base, '..', 'utils'));
+run(fullfile(base, '..', 'setup_paths.m'));
 
 %% Build problem via setup_problem
 cfg      = cfg_staggered_gaussian();

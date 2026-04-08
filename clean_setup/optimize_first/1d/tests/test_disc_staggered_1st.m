@@ -11,7 +11,7 @@ clear; clc;
 
 % Add paths (run from tests/ or from 1d/)
 base = fileparts(mfilename('fullpath'));
-addpath(fullfile(base, '..', 'discretization'));
+run(fullfile(base, '..', 'setup_paths.m'));
 
 %% Setup minimal problem
 problem.nt = 4;   ntm = problem.nt - 1;

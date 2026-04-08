@@ -16,7 +16,7 @@
 clear; clc;
 
 base = fileparts(mfilename('fullpath'));
-addpath(fullfile(base, '..', 'discretization'));
+run(fullfile(base, '..', 'setup_paths.m'));
 
 %% Setup
 problem.nt = 32;  problem.dt = 1/32;

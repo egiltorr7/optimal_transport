@@ -9,7 +9,7 @@
 %   2. L2 error ||(rho,m) - (rho,m)_exact|| vs n_x  (log-log)
 %   3. ADMM kinetic energy vs grid level vs analytical SB kinetic energy
 
-clear; clc;
+clear; clc; close all;
 
 base = fileparts(mfilename('fullpath'));
 addpath(fullfile(base, '..'));
@@ -24,8 +24,8 @@ addpath(fullfile(base, '..', 'utils'));
 %% Grid levels (nt doubles, nx doubles each level)
 nt_vals = [16,  32,  64,  128, 256];
 nx_vals = [32,  64,  128, 256, 512];
-% nt_vals = [16,  32,  64];
-% nx_vals = [32,  64,  128];
+nt_vals = [16,  32,  64];
+nx_vals = [32,  64,  128];
 n_grids = length(nt_vals);
 
 %% Base config: eps=0.1 (Schrödinger bridge), banded projection (exact for eps>0)
@@ -214,15 +214,19 @@ grid on;
 %% -----------------------------------------------------------------------
 %% Save figures
 %% -----------------------------------------------------------------------
-fig_dir = fullfile(base, '..', 'results', 'figures', ...
-    sprintf('sweep_grid_eps%.0e', cfg_base.vareps));
+fig_dir = fullfile(base, '..', 'results', 'figures');
 if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 
-figHandles = findall(0, 'Type', 'figure');
-for f = 1:length(figHandles)
-    fname = strrep(figHandles(f).Name, ' ', '_');
-    fname = strrep(fname, ':', '');
-    saveas(figHandles(f), fullfile(fig_dir, [fname '.png']));
+test_tag = 'sweep_grid_gaussian';
+cfg_tag  = sprintf('eps%g_gam%g', cfg_base.vareps, cfg_base.gamma);
+figs = findall(0, 'Type', 'figure');
+for fi = 1:numel(figs)
+    raw   = figs(fi).Name;
+    clean = regexprep(raw, '[^\w]', '_');
+    clean = regexprep(clean, '_+', '_');
+    clean = strtrim(clean);
+    fname = sprintf('%s__%s__%s', test_tag, clean, cfg_tag);
+    saveas(figs(fi), fullfile(fig_dir, [fname '.png']));
 end
 fprintf('\nFigures saved to: %s\n', fig_dir);
 

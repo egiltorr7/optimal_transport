@@ -5,14 +5,19 @@ function result = optimize_then_discretize(cfg, problem)
 %
 %   Solves the consensus problem
 %
-%       min   KE(x) + I_FP(z)   s.t.   x = z
+%       min   KE(x) + I_FP(y)   s.t.   x - y = 0
 %
-%   using admm_solve (over-relaxed ADMM, Fang et al. GADMM notation).
-%   The two proximal operators are:
+%   which fits the GADMM template (Fang et al. 2015, eq. 3) with
+%   A = I, B = -I, b = 0.
 %
-%     prox_f = prox of kinetic energy KE     (cfg.prox_ke)
-%     prox_g = prox of Fokker-Planck indicator = orthogonal projection
-%              onto the FP constraint set     (cfg.projection)
+%   The x-subproblem reduces to the proximal operator of KE:
+%
+%     x^{t+1} = prox_{KE/ρ}( y^t + γ^t/ρ )
+%
+%   The y-subproblem reduces to the projection onto the FP constraint:
+%
+%     y^{t+1} = proj_FP( x^{t+1}_relax - γ^t/ρ )
+%              where x^{t+1}_relax = z_hat (passed in by admm_solve)
 %
 %   Precomputes banded projection factors if cfg.projection is
 %   proj_fokker_planck_banded.
@@ -35,23 +40,42 @@ function result = optimize_then_discretize(cfg, problem)
 
     x0.rho = (1 - tt) .* rho0 + tt .* rho1;   % (ntm x nx)
     x0.mx  = zeros(nt, nxm);                   % (nt  x nxm)
+    y0     = x0;
 
-    % Proximal operators as closures (capture problem and cfg)
-    prox_f = @(v, sigma) cfg.prox_ke(v, sigma, problem);
-    prox_g = @(v, sigma) cfg.projection(v, problem, cfg);
+    % b = 0 (consensus constraint: A=I, B=-I, b=0)
+    b = s_zeros(x0);
+
+    % For A=I, B=-I, b=0:
+    %   x-subproblem: min KE(x) - x^T γ + (ρ/2)||x - y||²
+    %               = prox_{KE/ρ}( y + γ/ρ )
+    %   y-subproblem receives z_hat = α*x^{t+1} + (1-α)*y^t
+    %               : min I_FP(y) + y^T γ + (ρ/2)||z_hat - y||²
+    %               = proj_FP( z_hat - γ/ρ )
+    %   A(x) = x,  B(y) = -y
+    gamma = cfg.gamma;
+    sigma = 1 / gamma;
+
+    solve_x = @(delta, y) cfg.prox_ke( ...
+        s_add(y, s_scale(sigma, delta)), sigma, problem);
+
+    solve_y = @(delta, z_hat) cfg.projection( ...
+        s_sub(z_hat, s_scale(sigma, delta)), problem, cfg);
+
+    A_fn = @(x) x;
+    B_fn = @(y) s_scale(-1, y);
 
     % Weighted L2 norm for convergence check
     norm_fn = @(v) sqrt(dt * dx * (sum(v.rho(:).^2) + sum(v.mx(:).^2)));
 
     % ADMM options
-    admm_opts.rho      = cfg.gamma;
+    admm_opts.gamma    = gamma;
     admm_opts.alpha    = get_alpha(cfg);
     admm_opts.max_iter = cfg.max_iter;
     admm_opts.tol      = cfg.tol;
     admm_opts.norm_fn  = norm_fn;
 
     % Solve
-    [x, ~, info] = admm_solve(prox_f, prox_g, x0, admm_opts);
+    [x, ~, ~, info] = admm_solve(solve_x, solve_y, A_fn, B_fn, b, x0, y0, admm_opts); %#ok<ASGLU>
 
     result.rho      = x.rho;
     result.mx       = x.mx;

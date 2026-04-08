@@ -8,7 +8,7 @@
 %   Override any base config field before calling run_sweep, e.g.:
 %     cfg.gamma = 20;
 
-clear; clc;
+clear; clc; close all;
 
 base = fileparts(mfilename('fullpath'));
 addpath(fullfile(base, '..'));
@@ -136,12 +136,16 @@ grid on;
 fig_dir = fullfile(base, '..', 'results', 'figures');
 if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 
-figHandles = findall(0, 'Type', 'figure');
-for f = 1:length(figHandles)
-    fname = strrep(figHandles(f).Name, ' ', '_');
-    fname = strrep(fname, '[', ''); fname = strrep(fname, ']', '');
-    fname = strrep(fname, ',', ''); fname = strrep(fname, '=', '');
-    saveas(figHandles(f), fullfile(fig_dir, [fname '.png']));
+test_tag = 'sweep_eps_gaussian';
+cfg_tag  = sprintf('nt%d_nx%d_gam%g', cfg.nt, cfg.nx, cfg.gamma);
+figs = findall(0, 'Type', 'figure');
+for fi = 1:numel(figs)
+    raw   = figs(fi).Name;
+    clean = regexprep(raw, '[^\w]', '_');
+    clean = regexprep(clean, '_+', '_');
+    clean = strtrim(clean);
+    fname = sprintf('%s__%s__%s', test_tag, clean, cfg_tag);
+    saveas(figs(fi), fullfile(fig_dir, [fname '.png']));
 end
 fprintf('\nFigures saved to: %s\n', fig_dir);
 
