@@ -28,3 +28,20 @@ Thumbs.db
 # Temporary files
 *~
 *.tmp
+
+# LaTeX generated files
+*.aux
+*.log
+*.out
+*.toc
+*.nav
+*.snm
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# Video files
+*.mp4
+*.avi

@@ -1,0 +1,25 @@
+\contentsline {section}{\numberline {1}Problem Setup}{2}{section.1}%
+\contentsline {subsection}{\numberline {1.1}Continuous Formulation (Benam\^ou--Brenier)}{2}{subsection.1.1}%
+\contentsline {subsection}{\numberline {1.2}Regularization (Schr\"odinger Bridge)}{2}{subsection.1.2}%
+\contentsline {section}{\numberline {2}Staggered Grid Discretization}{2}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Grid Parameters}{2}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Variable Locations}{2}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Space-Time Grid Diagram}{3}{subsection.2.3}%
+\contentsline {subsection}{\numberline {2.4}Finite Difference Operators}{3}{subsection.2.4}%
+\contentsline {subsection}{\numberline {2.5}Interpolation Operators}{3}{subsection.2.5}%
+\contentsline {subsection}{\numberline {2.6}Fast Poisson Solve via DCT}{3}{subsection.2.6}%
+\contentsline {section}{\numberline {3}ADMM Algorithm}{4}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Splitting Formulation}{4}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Iteration}{4}{subsection.3.2}%
+\contentsline {paragraph}{Step 1 -- Proximal step (kinetic energy).}{4}{section*.2}%
+\contentsline {paragraph}{Step 2 -- Projection step (continuity constraint).}{4}{section*.3}%
+\contentsline {paragraph}{Step 3 -- Dual update.}{5}{section*.4}%
+\contentsline {subsection}{\numberline {3.3}Proximal Operator Detail}{5}{subsection.3.3}%
+\contentsline {subsection}{\numberline {3.4}Projection Step Detail}{5}{subsection.3.4}%
+\contentsline {subsection}{\numberline {3.5}Convergence Criterion}{6}{subsection.3.5}%
+\contentsline {section}{\numberline {4}Implementation Summary}{6}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Code Structure}{6}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Solver Interface}{6}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Initialization}{6}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}Parameter Guidance}{6}{subsection.4.4}%
+\contentsline {section}{\numberline {5}Numerical Results (Gaussian Translation)}{7}{section.5}%
