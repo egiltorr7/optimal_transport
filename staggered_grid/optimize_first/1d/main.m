@@ -20,13 +20,13 @@ xx = (x(2:end) + x(1:end-1))/2;
 % Step Size
 % Just doing ADMM so no restriction on step size
 gamma = 10;
-maxIter = 10000;
+maxIter = 5000;
 vareps = 1e-4;   % Parameter for Schrodinger Bridge
 
 % Reference solution parameters
 compute_reference = true;  % Set to true to compute and save reference solution
-use_reference = true;       % Set to true to load and use reference solution for error tracking
-maxIter_ref = 20000;       % Number of iterations for reference solution
+use_reference = false;       % Set to true to load and use reference solution for error tracking
+maxIter_ref = 10000;       % Number of iterations for reference solution
 
 %% Time Boundary Conditions for rho
 % Gaussian to Gaussian
