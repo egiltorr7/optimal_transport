@@ -1,5 +1,5 @@
 function ops = disc_staggered_1st(problem)
-% DISC_STAGGERED_1ST  1st-order staggered finite-difference operators for 1D.
+% DISC_STAGGERED_1ST  1st-order staggered finite-difference operators for 2D.
 %
 %   ops = disc_staggered_1st(problem)
 %
@@ -58,11 +58,11 @@ function ops = disc_staggered_1st(problem)
     ops.interp_y_at_phi = @(in, bc0, bc1) y_fwd_interp(in, bc0, bc1);
     ops.interp_y_at_m   = @(in)           y_bwd_interp(in);
     ops.deriv_t_at_phi  = @(in, bc0, bc1) t_fwd_deriv(in, bc0, bc1, dt);
-    ops.deriv_t_at_rho  = @(in)           t_bwd_deriv(in);
+    ops.deriv_t_at_rho  = @(in)           t_bwd_deriv(in, dt);
     ops.deriv_x_at_phi  = @(in, bc0, bc1) x_fwd_deriv(in, bc0, bc1, dx);
-    ops.deriv_x_at_m    = @(in)           x_bwd_deriv(in);
+    ops.deriv_x_at_m    = @(in)           x_bwd_deriv(in, dx);
     ops.deriv_y_at_phi  = @(in, bc0, bc1) y_fwd_deriv(in, bc0, bc1, dy);
-    ops.deriv_y_at_m    = @(in)           y_bwd_deriv(in);
+    ops.deriv_y_at_m    = @(in)           y_bwd_deriv(in, dy);
 
     % --- Adjoint operators (purely linear, no BC correction terms) ---
     % adjoint of (It_bwd *) is (* It_bwd') = (* It_fwd)  [since It_bwd' = It_fwd]
@@ -79,12 +79,12 @@ function out = t_fwd_interp(in, bc0, bc1)
     out = zeros(n, size(in,2), size(in,3), 'like', in);
 
     % Interior
-    out(2:end-1,:,:) = 0.5 * in(1:end-1,:,:);
-    out(2:end-1,:,:) = out(2:end-1,:,:) + 0.5 * in(2:end,:,:);
+    out(1:end-1,:,:) = 0.5*in(1:end,:,:);
+    out(2:end,:,:) = out(2:end,:,:) + 0.5*in(1:end,:,:);
 
     % Boundaries
-    out(1,:,:)   = 0.5 * bc0;
-    out(end,:,:) = 0.5 * bc1;
+    out(1,:,:)   = squeeze(out(1,:,:))   + 0.5 * bc0;
+    out(end,:,:) = squeeze(out(end,:,:)) + 0.5 * bc1;
 
 end
 
@@ -99,12 +99,12 @@ function out = x_fwd_interp(in, bc0, bc1)
     out = zeros(size(in,1), n, size(in,3), 'like', in);
 
     % Interior
-    out(:,2:end-1,:) = 0.5 * in(:,1:end-1,:);
-    out(:,2:end-1,:) = out(:,2:end-1,:) + 0.5 * in(:,2:end,:);
+    out(:,1:end-1,:) = 0.5 * in(:,1:end,:);
+    out(:,2:end,:)   = out(:,2:end,:) + 0.5 * in(:,1:end,:);
 
     % Boundaries
-    out(:,1,:)   = 0.5 * bc0;
-    out(:,end,:) = 0.5 * bc1;
+    out(:,1,:)   = squeeze(out(:,1,:))   + 0.5 * bc0;
+    out(:,end,:) = squeeze(out(:,end,:)) + 0.5 * bc1;
 end
 
 function out = x_bwd_interp(in)
@@ -117,12 +117,12 @@ function out = y_fwd_interp(in, bc0, bc1)
     out = zeros(size(in,1), size(in,2), n, 'like', in);
 
     % Interior
-    out(:,:,2:end-1) = 0.5 * in(:,:,1:end-1);
-    out(:,:,2:end-1) = out(:,:,2:end-1) + 0.5 * in(:,:,2:end);
+    out(:,:,1:end-1) = 0.5 * in(:,:,1:end);
+    out(:,:,2:end)   = out(:,:,2:end) + 0.5 * in(:,:,1:end);
 
     % Boundaries
-    out(:,:,1)   = 0.5 * bc0;
-    out(:,:,end) = 0.5 * bc1;
+    out(:,:,1)   = squeeze(out(:,:,1))   + 0.5 * bc0;
+    out(:,:,end) = squeeze(out(:,:,end)) + 0.5 * bc1;
 end
 
 function out = y_bwd_interp(in)
@@ -136,17 +136,17 @@ function out = t_fwd_deriv(in, bc0, bc1, dt)
     out = zeros(n, size(in,2), size(in,3), 'like', in);
 
     % Interior
-    out(2:end-1,:,:) = - in(1:end-1,:,:)/dt;
-    out(2:end-1,:,:) = out(2:end-1,:,:) + in(2:end,:,:)/dt;
+    out(1:end-1,:,:) =  in(1:end,:,:) / dt;
+    out(2:end,:,:)   = out(2:end,:,:) - in(1:end,:,:) / dt;
 
     % Boundaries
-    out(1,:,:)   =  -bc0/dt;
-    out(end,:,:) = bc1/dt;
-    
+    out(1,:,:)   = squeeze(out(1,:,:))   - bc0/dt;
+    out(end,:,:) = squeeze(out(end,:,:)) + bc1/dt;
+
 end
 
-function out = t_bwd_deriv(in)
-    out = (in(1:end-1,:,:)- in(2:end,:,:))/dt;
+function out = t_bwd_deriv(in, dt)
+    out = (in(2:end,:,:) - in(1:end-1,:,:)) / dt;
 end
 
 function out = x_fwd_deriv(in, bc0, bc1, dx)
@@ -155,32 +155,32 @@ function out = x_fwd_deriv(in, bc0, bc1, dx)
     out = zeros(size(in,1), n, size(in,3), 'like', in);
 
     % Interior
-    out(:,2:end-1,:) = - in(:,1:end-1,:)/dx;
-    out(:,2:end-1,:) = out(:,2:end-1,:) +  in(:,2:end,:)/dx;
+    out(:,1:end-1,:) =  in(:,1:end,:) / dx;
+    out(:,2:end,:)   = out(:,2:end,:) - in(:,1:end,:) / dx;
 
     % Boundaries
-    out(:,1,:)   = -bc0/dx;
-    out(:,end,:) = bc1/dx;
+    out(:,1,:)   = squeeze(out(:,1,:))   - bc0/dx;
+    out(:,end,:) = squeeze(out(:,end,:)) + bc1/dx;
 end
 
-function out = x_bwd_deriv(in)
-    out = (in(:,1:end-1,:)- in(:,2:end,:))/dx;
+function out = x_bwd_deriv(in, dx)
+    out = (in(:,2:end,:) - in(:,1:end-1,:)) / dx;
 end
 
 function out = y_fwd_deriv(in, bc0, bc1, dy)
 
-    n = size(in,2) + 1;
-    out = zeros(size(in,1), n, size(in,3), 'like', in);
+    n = size(in,3) + 1;
+    out = zeros(size(in,1), size(in,2), n, 'like', in);
 
     % Interior
-    out(:,:,2:end-1) = - in(:,:,1:end-1)/dy;
-    out(:,:,2:end-1) = out(:,:,2:end-1) +  in(:,:,2:end)/dy;
+    out(:,:,1:end-1) =  in(:,:,1:end) / dy;
+    out(:,:,2:end)   = out(:,:,2:end) - in(:,:,1:end) / dy;
 
     % Boundaries
-    out(:,:,1)   = -bc0/dy;
-    out(:,:,end) = bc1/dy;
+    out(:,:,1)   = squeeze(out(:,:,1))   - bc0/dy;
+    out(:,:,end) = squeeze(out(:,:,end)) + bc1/dy;
 end
 
-function out = y_bwd_deriv(in)
-    out = (in(:,:,1:end-1)- in(:,:,2:end))/dy;
+function out = y_bwd_deriv(in, dy)
+    out = (in(:,:,2:end) - in(:,:,1:end-1)) / dy;
 end

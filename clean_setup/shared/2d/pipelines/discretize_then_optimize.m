@@ -1,5 +1,5 @@
 function result = discretize_then_optimize(cfg, problem)
-% DISCRETIZE_THEN_OPTIMIZE  Linearized ADMM pipeline for 1D OT / SB.
+% DISCRETIZE_THEN_OPTIMIZE  Linearized ADMM pipeline for 2D OT / SB.
 %
 %   result = discretize_then_optimize(cfg, problem)
 %
@@ -15,18 +15,16 @@ function result = discretize_then_optimize(cfg, problem)
 %     b   = 0   (BCs absorbed into affine A)
 %
 %   Variable grids:
-%     x.rho  (ntm x nx x ny)   staggered density
-%     x.mx   (nt  x nxm x ny)  staggered momentum
-%     x.my   (nt  x nx x nym)  staggered momentum
-%     y.rho  (nt  x nx x ny)   cell-centre density
-%     y.mx   (nt  x nx x ny)   cell-centre momentum
+%     x.rho  (ntm x nx  x ny)   staggered density
+%     x.mx   (nt  x nxm x ny)   staggered x-momentum
+%     x.my   (nt  x nx  x nym)  staggered y-momentum
+%     y.rho  (nt  x nx  x ny)   cell-centre density
+%     y.mx   (nt  x nx  x ny)   cell-centre x-momentum
+%     y.my   (nt  x nx  x ny)   cell-centre y-momentum
 %
 %   A is affine: A_fn(x).rho = interp_t_at_phi(x.rho, rho0, rho1)
 %                A_fn(x).mx  = interp_x_at_phi(x.mx,  0,    0   )
 %                A_fn(x).my  = interp_y_at_phi(x.my,  0,    0   )
-%   The BC values rho0, rho1 enter as ghost values in the forward
-%   time interpolation, enforcing the boundary conditions on x at
-%   every projected-gradient x-step.
 %
 %   At_fn is the adjoint of the LINEAR part of A (no BC correction):
 %                At_fn(v).rho = interp_t_at_rho(v.rho)
@@ -45,8 +43,10 @@ function result = discretize_then_optimize(cfg, problem)
 
     dt   = problem.dt;
     dx   = problem.dx;
+    dy   = problem.dy;
     nt   = problem.nt;   ntm = nt - 1;
     nx   = problem.nx;   nxm = nx - 1;
+    ny   = problem.ny;   nym = ny - 1;
     rho0 = problem.rho0;
     rho1 = problem.rho1;
     ops  = problem.ops;
@@ -56,32 +56,64 @@ function result = discretize_then_optimize(cfg, problem)
         problem.banded_proj = precomp_banded_proj(problem, cfg.vareps);
     end
 
+    % --- GPU setup (cast all persistent arrays before closures are formed) ---
+    use_gpu = isfield(cfg, 'use_gpu') && cfg.use_gpu;
+    if use_gpu
+        rho0 = gpuArray(rho0);
+        rho1 = gpuArray(rho1);
+        problem.rho0     = rho0;
+        problem.rho1     = rho1;
+        problem.lambda_t = gpuArray(problem.lambda_t);
+        if isequal(cfg.projection, @proj_fokker_planck_banded)
+            problem.banded_proj.lower_all = gpuArray(problem.banded_proj.lower_all);
+            problem.banded_proj.main_all  = gpuArray(problem.banded_proj.main_all);
+            problem.banded_proj.upper_all = gpuArray(problem.banded_proj.upper_all);
+        end
+    end
+
     % --- Initial guesses ---
     % x on staggered grid
-    t_stag = linspace(0, 1, ntm)';
-    x0.rho = (1 - t_stag) .* rho0 + t_stag .* rho1;   % (ntm x nx)
-    x0.mx  = zeros(nt, nxm);                            % (nt  x nxm)
+    t_stag  = reshape(linspace(0, 1, ntm)', ntm, 1, 1);
+    rho0_3d = reshape(rho0, 1, nx, ny);
+    rho1_3d = reshape(rho1, 1, nx, ny);
+    x0.rho = (1 - t_stag) .* rho0_3d + t_stag .* rho1_3d;   % (ntm x nx x ny)
+    x0.mx  = zeros(nt, nxm, ny);
+    x0.my  = zeros(nt, nx,  nym);
 
     % y on cell-centre grid
-    t_cc   = ((1:nt)' - 0.5) * dt;
-    y0.rho = (1 - t_cc) .* rho0 + t_cc .* rho1;        % (nt x nx)
-    y0.mx  = zeros(nt, nx);                             % (nt x nx)
+    t_cc    = reshape(((1:nt)' - 0.5) * dt, nt, 1, 1);
+    y0.rho = (1 - t_cc) .* rho0_3d + t_cc .* rho1_3d;        % (nt x nx x ny)
+    y0.mx  = zeros(nt, nx, ny);
+    y0.my  = zeros(nt, nx, ny);
+
+    % Cast initial guesses to GPU after they are built
+    if use_gpu
+        x0 = structfun(@gpuArray, x0, 'UniformOutput', false);
+        y0 = structfun(@gpuArray, y0, 'UniformOutput', false);
+    end
 
     % b = 0 on cell-centre grid (BCs absorbed into affine A_fn)
     b = s_zeros(y0);
 
     % --- Operators ---
-    gamma     = cfg.gamma;
-    sigma     = 1 / gamma;
-    zeros_nt  = zeros(nt, 1);
+    gamma   = cfg.gamma;
+    sigma   = 1 / gamma;
+    zeros_x = zeros(nt, ny);    % x-wall BCs  (nt x ny)
+    zeros_y = zeros(nt, nx);    % y-wall BCs  (nt x nx)
+    if use_gpu
+        zeros_x = gpuArray(zeros_x);
+        zeros_y = gpuArray(zeros_y);
+    end
 
     % A: affine interpolation staggered -> cell-centres (BCs baked in)
     A_fn  = @(x) struct('rho', ops.interp_t_at_phi(x.rho, rho0, rho1), ...
-                        'mx',  ops.interp_x_at_phi(x.mx, zeros_nt, zeros_nt));
+                        'mx',  ops.interp_x_at_phi(x.mx, zeros_x, zeros_x), ...
+                        'my',  ops.interp_y_at_phi(x.my, zeros_y, zeros_y));
 
     % A^T: adjoint of the LINEAR part of A (no BC terms)
     At_fn = @(v) struct('rho', ops.interp_t_at_rho(v.rho), ...
-                        'mx',  ops.interp_x_at_m(v.mx));
+                        'mx',  ops.interp_x_at_m(v.mx), ...
+                        'my',  ops.interp_y_at_m(v.my));
 
     B_fn  = @(y) s_scale(-1, y);
 
@@ -93,7 +125,8 @@ function result = discretize_then_optimize(cfg, problem)
         s_sub(z_hat, s_scale(sigma, delta)), sigma, problem);
 
     % Weighted L2 norm on cell-centre grid for convergence
-    norm_fn = @(v) sqrt(dt * dx * (sum(v.rho(:).^2) + sum(v.mx(:).^2)));
+    norm_fn = @(v) sqrt(dt * dx * dy * ...
+        (sum(v.rho(:).^2) + sum(v.mx(:).^2) + sum(v.my(:).^2)));
 
     % --- ADMM options ---
     admm_opts.gamma    = gamma;
@@ -104,13 +137,21 @@ function result = discretize_then_optimize(cfg, problem)
     admm_opts.norm_fn  = norm_fn;
 
     % --- Solve ---
-    [x, y, ~, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, b, x0, y0, admm_opts); 
+    [x, y, ~, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, b, x0, y0, admm_opts);
+
+    % Gather from GPU if needed, then return
+    if use_gpu
+        x.rho = gather(x.rho);  x.mx = gather(x.mx);  x.my = gather(x.my);
+        y.rho = gather(y.rho);  y.mx = gather(y.mx);  y.my = gather(y.my);
+    end
 
     % Return both grids: x on staggered (FP-feasible), y on cell-centres (KE-optimal)
     result.rho_stag  = x.rho;
     result.mx_stag   = x.mx;
+    result.my_stag   = x.my;
     result.rho_cc    = y.rho;
     result.mx_cc     = y.mx;
+    result.my_cc     = y.my;
     result.residual  = info.residual;
     result.iters     = info.iters;
     result.converged = info.converged;

@@ -1,64 +1,72 @@
 function bp = precomp_banded_proj(problem, vareps)
-% PRECOMP_BANDED_PROJ  Precompute LU factors for proj_fokker_planck_banded.
+% PRECOMP_BANDED_PROJ  Precompute tridiagonal diagonals for proj_fokker_planck_banded (2D).
 %
 %   bp = precomp_banded_proj(problem, vareps)
 %
-%   Call once per (grid, vareps) pair and store the result in
-%   problem.banded_proj before running the ADMM loop.
+%   The FP operator AA* decouples under DCT-xy into nx*ny tridiagonal systems
+%   indexed by (kx, ky) with combined eigenvalue lxy = lambda_x(kx) + lambda_y(ky):
 %
-%   The FP operator AA* decouples under DCT in x into nx independent
-%   nt x nt tridiagonal systems:
+%     T_{kx,ky} = M0 + lxy * diag(M1d) + lxy^2 * M2
 %
-%     T_k = M0 + lambda_x(k)*diag(M1d) + lambda_x(k)^2 * M2,  k=1..nx
+%   where M0, M1d, M2 are nt x nt time-direction matrices.
+%   Since T is tridiagonal, we precompute all diagonals vectorised over (kx, ky):
 %
-%   where:
-%     M0  = -Dt_phi * Dt_rho          (tridiagonal, = time neg-Laplacian)
-%     M1d = diag(1, ..., 1) with      (diagonal, boundary correction from eps)
-%           M1d(1)  = 1 + eps/dt
-%           M1d(nt) = 1 - eps/dt
-%     M2  = eps^2 * It_phi * It_rho   (tridiagonal)
+%     bp.lower_all  (nt-1 x nx x ny)   lower diagonals for all modes
+%     bp.main_all   (nt   x nx x ny)   main  diagonals (mode (1,1) set to 1)
+%     bp.upper_all  (nt-1 x nx x ny)   upper diagonals for all modes
 %
-%   k=1 (lambda_x=0, T_1=M0) is singular and handled at projection time
-%   via a 1D DCT in t using problem.lambda_t.
-%   k=2..nx are SPD; their LU factors are stored here.
+%   Mode (1,1) has lxy=0 and a singular T; it is handled separately via DCT-t
+%   in proj_fokker_planck_banded.  Its main diagonal is set to 1 so the batched
+%   Thomas solver produces 0 when given a zero RHS for that mode.
 %
-%   Output fields:
-%     bp.Tk_L, bp.Tk_U, bp.Tk_P   cell(1,nx)  LU factors for k=2..nx
+%   All output arrays are regular (CPU) doubles.  Cast to gpuArray in
+%   discretize_then_optimize if cfg.use_gpu is set.
 
     nt  = problem.nt;   ntm = nt - 1;
     nx  = problem.nx;
+    ny  = problem.ny;
     dt  = problem.dt;
-    dx  = problem.dx;
 
-    % Time operators (nt x ntm)
+    % Time operators: (nt x ntm) and (ntm x nt)
     It_phi = 0.5 * toeplitz([1 1 zeros(1,ntm-1)], [1 zeros(1,ntm-1)]);
     Dt_phi =       toeplitz([1 -1 zeros(1,ntm-1)], [1 zeros(1,ntm-1)]) / dt;
-
-    % Time back-operators (ntm x nt)
     It_rho = 0.5 * toeplitz([1 zeros(1,ntm-1)], [1 1 zeros(1,ntm-1)]);
     Dt_rho =       toeplitz([-1 zeros(1,ntm-1)], [-1 1 zeros(1,ntm-1)]) / dt;
 
-    % T_k building blocks (all nt x nt)
-    M0_bnd = -Dt_phi * Dt_rho;                  % positive semi-definite
+    % T building blocks (nt x nt, all tridiagonal)
+    M0_bnd = -Dt_phi * Dt_rho;
     M1d    = ones(nt, 1);
     M1d(1) = 1 + vareps / dt;
     M1d(nt)= 1 - vareps / dt;
     M2_bnd = vareps^2 * (It_phi * It_rho);
 
-    % Spatial DCT-II (Neumann) eigenvalues
-    lambda_x = (2 - 2*cos(pi * dx * (0:nx-1))) / dx^2;   % 1 x nx
+    % Extract tridiagonal diagonals as column vectors
+    lower_M0 = diag(M0_bnd, -1);   % (ntm x 1)
+    main_M0  = diag(M0_bnd);       % (nt  x 1)
+    upper_M0 = diag(M0_bnd,  1);   % (ntm x 1)
+    lower_M2 = diag(M2_bnd, -1);
+    main_M2  = diag(M2_bnd);
+    upper_M2 = diag(M2_bnd,  1);
 
-    % LU-factorize T_k for k=2..nx
-    Tk_L = cell(1, nx);
-    Tk_U = cell(1, nx);
-    Tk_P = cell(1, nx);
-    for k = 2:nx
-        lxk = lambda_x(k);
-        Tk  = sparse(M0_bnd + diag(lxk * M1d) + lxk^2 * M2_bnd);
-        [Tk_L{k}, Tk_U{k}, Tk_P{k}] = lu(Tk);
-    end
+    % Combined spatial eigenvalue lxy = lambda_x(kx) + lambda_y(ky): (1 x nx x ny)
+    lxy  = reshape(problem.lambda_x, 1, nx, 1) + reshape(problem.lambda_y, 1, 1, ny);
+    lxy2 = lxy .^ 2;
 
-    bp.Tk_L = Tk_L;
-    bp.Tk_U = Tk_U;
-    bp.Tk_P = Tk_P;
+    % Reshape diagonal vectors for broadcasting: (ntm/nt x 1 x 1)
+    lower_M0 = reshape(lower_M0, ntm, 1, 1);
+    upper_M0 = reshape(upper_M0, ntm, 1, 1);
+    lower_M2 = reshape(lower_M2, ntm, 1, 1);
+    upper_M2 = reshape(upper_M2, ntm, 1, 1);
+    main_M0  = reshape(main_M0,  nt,  1, 1);
+    main_M2  = reshape(main_M2,  nt,  1, 1);
+    M1d      = reshape(M1d,      nt,  1, 1);
+
+    % Vectorised diagonals for all (kx, ky) modes
+    bp.lower_all = lower_M0 + lxy2 .* lower_M2;                    % (ntm x nx x ny)
+    bp.main_all  = main_M0  + lxy  .* M1d + lxy2 .* main_M2;      % (nt  x nx x ny)
+    bp.upper_all = upper_M0 + lxy2 .* upper_M2;                    % (ntm x nx x ny)
+
+    % Mode (1,1): lxy=0, T=M0 is singular.  Set main diagonal to 1 so Thomas
+    % gives 0 for a zero RHS; proj_fokker_planck_banded overwrites this mode.
+    bp.main_all(:, 1, 1) = 1;
 end
