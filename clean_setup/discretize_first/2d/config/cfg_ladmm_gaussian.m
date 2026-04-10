@@ -18,12 +18,12 @@ function cfg = cfg_ladmm_gaussian()
     cfg.gamma    = 100;       % penalty parameter γ
     cfg.tau      = 101;       % proximal penalty τ; convergence needs τ > γ*||A||² ≤ γ
     cfg.alpha    = 1.0;       % over-relaxation (1 = standard, (1,2) = over-relaxed)
-    cfg.vareps   = 1e-2;      % Schrödinger bridge regularisation (0 = pure OT)
+    cfg.vareps   = 0;         % Schrödinger bridge regularisation (0 = pure OT)
     cfg.max_iter = 10000;
     cfg.tol      = 1e-8;
 
     % GPU options (comment out or set use_gpu=false to run on CPU)
-    cfg.use_gpu    = false;
+    cfg.use_gpu    = true;
     cfg.gpu_device = 1;    % device index (1-based); check with gpuDeviceCount / gpuDeviceTable
 
 end
