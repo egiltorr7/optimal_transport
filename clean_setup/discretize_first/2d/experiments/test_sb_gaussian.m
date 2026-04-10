@@ -55,7 +55,13 @@ mat_file = fullfile(res_dir, sprintf('result_%s.mat', ftag));
 save(mat_file, 'result', 'cfg', 'problem', 'rho_ana_cc', 'obj', 'ftag');
 fprintf('Results saved to %s\n', mat_file);
 
-%% --- Figures (headless-safe) ---
+%% --- Skip figures in batch/headless mode ---
+if ~usejava('desktop')
+    fprintf('Headless mode: skipping figures. Run postprocess_sb_gaussian.m locally.\n');
+    return;
+end
+
+%% --- Figures (interactive mode only) ---
 newfig = @(name) figure('Name', name, 'Visible', 'off', ...
                          'Position', [0 0 1200 500]);
 
