@@ -18,9 +18,9 @@ if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 %% --- Select result ---
 % Set any field to filter; leave empty ([]) to match anything.
 % If multiple files match, the most recent is loaded.
-sel.nt  = 256;      % e.g. 64
-sel.nx  = 256;      % e.g. 128
-sel.ny  = 8;      %e.g. 128
+sel.nt  = 64;      % e.g. 64
+sel.nx  = 128;      % e.g. 128
+sel.ny  = 128;      %e.g. 128
 sel.eps = 0;      % e.g. 0.01
 sel.gam = [];      % e.g. 100
 sel.tau = [];      % e.g. 101
