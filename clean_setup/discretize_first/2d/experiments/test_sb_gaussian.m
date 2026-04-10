@@ -9,6 +9,7 @@
 
 clear; close all;
 run(fullfile(fileparts(mfilename('fullpath')), '..', 'setup_paths.m'));
+clear functions   % flush MATLAB's function cache so cfg overrides are picked up
 
 res_dir = fullfile(fileparts(mfilename('fullpath')), '..', 'results');
 fig_dir = fullfile(res_dir, 'figures');
@@ -17,8 +18,10 @@ if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 %% --- Config and problem ---
 if exist('cfg_ladmm_gaussian_run', 'file')
     cfg = cfg_ladmm_gaussian_run();
+    fprintf('Config: cfg_ladmm_gaussian_run (local override)\n');
 else
     cfg = cfg_ladmm_gaussian();
+    fprintf('Config: cfg_ladmm_gaussian (defaults)\n');
 end
 prob_def = prob_gaussian();
 problem  = setup_problem(cfg, prob_def);
