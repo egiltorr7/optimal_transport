@@ -4,8 +4,9 @@
 %
 %     rsync user@remote:.../results/result_*.mat ./results/
 %
-%   Then run this script.  It will find the most recent .mat in results/
-%   or you can set MAT_FILE explicitly below.
+%   Then run this script.  Set fields in the 'sel' struct to filter which
+%   result to load (nt, nx, ny, eps, gam, tau).  Leave a field empty ([])
+%   to match any value.  If multiple files match, the most recent is used.
 
 clear; close all;
 run(fullfile(fileparts(mfilename('fullpath')), '..', 'setup_paths.m'));
@@ -14,18 +15,45 @@ res_dir = fullfile(fileparts(mfilename('fullpath')), '..', 'results');
 fig_dir = fullfile(res_dir, 'figures');
 if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 
-%% --- Load result ---
-MAT_FILE = '';   % set explicitly, e.g. 'results/result_nt64_nx128_ny128_gam100_tau101_eps0.01.mat'
-                 % or leave empty to auto-pick the most recent
+%% --- Select result ---
+% Set any field to filter; leave empty ([]) to match anything.
+% If multiple files match, the most recent is loaded.
+sel.nt  = 64;      % e.g. 64
+sel.nx  = 128;      % e.g. 128
+sel.ny  = 128;      % e.g. 128
+sel.eps = 0;      % e.g. 0.01
+sel.gam = [];      % e.g. 100
+sel.tau = [];      % e.g. 101
 
-if isempty(MAT_FILE)
-    mats = dir(fullfile(res_dir, 'result_*.mat'));
-    if isempty(mats)
-        error('No result_*.mat files found in %s', res_dir);
-    end
-    [~, idx] = max([mats.datenum]);
-    MAT_FILE = fullfile(res_dir, mats(idx).name);
+mats = dir(fullfile(res_dir, 'result_*.mat'));
+if isempty(mats)
+    error('No result_*.mat files found in %s', res_dir);
 end
+
+keep = true(numel(mats), 1);
+tokens = {'nt','nx','ny','gam','tau','eps'};
+for i = 1:numel(mats)
+    for j = 1:numel(tokens)
+        f   = tokens{j};
+        val = sel.(f);
+        if isempty(val), continue; end
+        tok = regexp(mats(i).name, [f '([\d.eE+-]+)'], 'tokens', 'once');
+        if isempty(tok) || abs(str2double(tok{1}) - val) > 1e-10*(abs(val)+1)
+            keep(i) = false;  break;
+        end
+    end
+end
+
+mats = mats(keep);
+if isempty(mats)
+    error('No result_*.mat files match the selection criteria.');
+end
+if numel(mats) > 1
+    fprintf('Multiple matches — loading most recent:\n');
+    for i = 1:numel(mats), fprintf('  %s\n', mats(i).name); end
+end
+[~, idx] = max([mats.datenum]);
+MAT_FILE = fullfile(res_dir, mats(idx).name);
 
 fprintf('Loading %s ...\n', MAT_FILE);
 load(MAT_FILE, 'result', 'cfg', 'problem', 'rho_ana_cc', 'obj', 'ftag');

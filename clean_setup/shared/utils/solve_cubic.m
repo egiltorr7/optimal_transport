@@ -1,7 +1,6 @@
 function x = solve_cubic(a,b,c,d)
 test = 0;
 %%
-x = zeros(size(b));
 b = b./a;
 c = c./a;
 d = d./a;
@@ -27,23 +26,29 @@ if test == 1
     end
 else
     %%
+    x = zeros(size(b), 'like', b);
+
     ind = (p==0);
-    x(ind) = -nthroot(q(ind),3);
+    x(ind) = -cbrt(q(ind));
 
     ind = (p~=0 & delta==0);
     x(ind) = max(3*q(ind)./p(ind), -3*q(ind)./p(ind)/2);
 
     ind = (p~=0 & delta>0);
     s = sqrt(delta(ind));
-    x(ind) = nthroot(-q(ind)/2-s,3) + nthroot(-q(ind)/2+s,3);
+    x(ind) = cbrt(-q(ind)/2-s) + cbrt(-q(ind)/2+s);
 
     ind = (p~=0 & delta<0);
     r = 2*sqrt(-p(ind)/3);
     s = 3*q(ind)./(p(ind).*r);
-    theta = real(acos(s)/3);
+    theta = real(acos(complex(s))/3);
     x(ind) = r.*cos(theta);
 end
 
-x = x - b/3;    
+x = x - b/3;
 
+end
+
+function y = cbrt(x)
+    y = sign(x) .* abs(x).^(1/3);
 end
