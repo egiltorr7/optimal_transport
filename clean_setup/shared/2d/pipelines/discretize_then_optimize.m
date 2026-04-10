@@ -59,6 +59,9 @@ function result = discretize_then_optimize(cfg, problem)
     % --- GPU setup (cast all persistent arrays before closures are formed) ---
     use_gpu = isfield(cfg, 'use_gpu') && cfg.use_gpu;
     if use_gpu
+        gpu_id = 1;
+        if isfield(cfg, 'gpu_device'), gpu_id = cfg.gpu_device; end
+        gpuDevice(gpu_id);
         rho0 = gpuArray(rho0);
         rho1 = gpuArray(rho1);
         problem.rho0     = rho0;
