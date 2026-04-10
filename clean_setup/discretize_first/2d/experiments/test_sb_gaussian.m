@@ -15,7 +15,11 @@ fig_dir = fullfile(res_dir, 'figures');
 if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 
 %% --- Config and problem ---
-cfg      = cfg_ladmm_gaussian();
+if exist('cfg_ladmm_gaussian_run', 'file')
+    cfg = cfg_ladmm_gaussian_run();
+else
+    cfg = cfg_ladmm_gaussian();
+end
 prob_def = prob_gaussian();
 problem  = setup_problem(cfg, prob_def);
 
