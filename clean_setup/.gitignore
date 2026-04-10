@@ -1,0 +1,20 @@
+# Results and figures (generated, not source)
+results/
+*/results/
+*/*/results/
+*/*/*/results/
+
+# Run-specific config overrides (machine-local, not committed)
+**/cfg_*_run.m
+
+# MATLAB autosave
+*.asv
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.pdf
+*.synctex.gz
+
+# OS
+.DS_Store
