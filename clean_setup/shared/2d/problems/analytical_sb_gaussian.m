@@ -21,7 +21,7 @@ function [rho_ana, mx_ana, my_ana] = analytical_sb_gaussian(problem, vareps)
 
     mu0_x = 0.35;  mu0_y = 0.35;
     mu1_x = 0.65;  mu1_y = 0.65;
-    sigma = 0.07;
+    sigma = 0.1;
 
     nt  = problem.nt;   ntm = nt - 1;   dt = problem.dt;
     nx  = problem.nx;   nxm = nx - 1;   dx = problem.dx;

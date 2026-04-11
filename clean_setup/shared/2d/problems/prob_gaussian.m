@@ -11,6 +11,6 @@ function prob = prob_gaussian()
         exp(-((xx - mux).^2 + (yy - muy).^2) / (2*sig^2)) / (2*pi*sig^2);
 
     prob.name      = 'gaussian';
-    prob.rho0_func = @(xx, yy) Normal2d(xx, yy, 0.35, 0.35, 0.07);
-    prob.rho1_func = @(xx, yy) Normal2d(xx, yy, 0.65, 0.65, 0.07);
+    prob.rho0_func = @(xx, yy) Normal2d(xx, yy, 0.35, 0.35, 0.1);
+    prob.rho1_func = @(xx, yy) Normal2d(xx, yy, 0.65, 0.65, 0.1);
 end
