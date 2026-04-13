@@ -54,6 +54,8 @@ function result = discretize_then_optimize(cfg, problem)
     % Precompute banded FP projection factors
     if isequal(cfg.projection, @proj_fokker_planck_banded)
         problem.banded_proj = precomp_banded_proj(problem, cfg.vareps);
+    elseif isequal(cfg.projection, @proj_fokker_planck_spike2)
+        problem.banded_proj = precomp_banded_proj_spike2(problem, cfg.vareps);
     end
 
     % --- GPU setup (cast all persistent arrays before closures are formed) ---
@@ -71,6 +73,12 @@ function result = discretize_then_optimize(cfg, problem)
             problem.banded_proj.lower_all = gpuArray(problem.banded_proj.lower_all);
             problem.banded_proj.main_all  = gpuArray(problem.banded_proj.main_all);
             problem.banded_proj.upper_all = gpuArray(problem.banded_proj.upper_all);
+        elseif isequal(cfg.projection, @proj_fokker_planck_spike2)
+            problem.banded_proj.lower_all    = gpuArray(problem.banded_proj.lower_all);
+            problem.banded_proj.main_all     = gpuArray(problem.banded_proj.main_all);
+            problem.banded_proj.upper_all    = gpuArray(problem.banded_proj.upper_all);
+            problem.banded_proj.spike_pivots = gpuArray(problem.banded_proj.spike_pivots);
+            problem.banded_proj.spike_v      = gpuArray(problem.banded_proj.spike_v);
         end
     end
 
@@ -140,7 +148,19 @@ function result = discretize_then_optimize(cfg, problem)
     admm_opts.norm_fn  = norm_fn;
 
     % --- Solve ---
+    % Snapshot GPU memory just before solve (all arrays allocated)
+    if use_gpu
+        gpu_info_pre  = gpuDevice();
+        mem_pre_bytes = gpu_info_pre.TotalMemory - gpu_info_pre.AvailableMemory;
+    end
+
     [x, y, ~, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, b, x0, y0, admm_opts);
+
+    % GPU memory after solve (includes result arrays still on device)
+    if use_gpu
+        gpu_info_post  = gpuDevice();
+        mem_post_bytes = gpu_info_post.TotalMemory - gpu_info_post.AvailableMemory;
+    end
 
     % Gather from GPU if needed, then return
     if use_gpu
@@ -161,6 +181,21 @@ function result = discretize_then_optimize(cfg, problem)
     result.error     = info.residual(end);
     result.walltime  = info.walltime;
     result.cfg       = cfg;
+
+    % Computational cost metrics
+    result.time_per_iter = info.walltime / info.iters;          % seconds/iter (grid-normalised)
+    result.throughput    = info.iters / info.walltime;           % iters/sec
+    result.N_cells       = nt * nx * ny;                         % total cell count
+    result.time_per_iter_per_cell = info.walltime / (info.iters * nt * nx * ny);  % sec/(iter·cell)
+    if use_gpu
+        result.gpu_mem_pre_mb  = mem_pre_bytes  / 1e6;
+        result.gpu_mem_post_mb = mem_post_bytes / 1e6;
+        result.gpu_total_mb    = gpu_info_post.TotalMemory / 1e6;
+    else
+        result.gpu_mem_pre_mb  = 0;
+        result.gpu_mem_post_mb = 0;
+        result.gpu_total_mb    = 0;
+    end
 end
 
 function alpha = get_alpha(cfg)

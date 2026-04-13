@@ -61,12 +61,52 @@ function bp = precomp_banded_proj(problem, vareps)
     main_M2  = reshape(main_M2,  nt,  1, 1);
     M1d      = reshape(M1d,      nt,  1, 1);
 
-    % Vectorised diagonals for all (kx, ky) modes
-    bp.lower_all = lower_M0 + lxy2 .* lower_M2;                    % (ntm x nx x ny)
-    bp.main_all  = main_M0  + lxy  .* M1d + lxy2 .* main_M2;      % (nt  x nx x ny)
-    bp.upper_all = upper_M0 + lxy2 .* upper_M2;                    % (ntm x nx x ny)
+    % Thomas stability requires M1d(nt) = 1 - eps/dt > 0, i.e. eps*nt < 1.
+    % When this fails, fall back to per-mode LU (like the 1D solver).
+    bp.use_lu = (vareps / dt) > 1;
 
-    % Mode (1,1): lxy=0, T=M0 is singular.  Set main diagonal to 1 so Thomas
-    % gives 0 for a zero RHS; proj_fokker_planck_banded overwrites this mode.
-    bp.main_all(:, 1, 1) = 1;
+    if bp.use_lu
+        fprintf('precomp_banded_proj: eps/dt = %.2f > 1, using per-mode LU (Thomas unstable).\n', vareps/dt);
+
+        % Flatten diagonal vectors for scalar access
+        lower_M0_v = lower_M0(:);   % (ntm x 1)
+        main_M0_v  = main_M0(:);    % (nt  x 1)
+        upper_M0_v = upper_M0(:);   % (ntm x 1)
+        lower_M2_v = lower_M2(:);
+        main_M2_v  = main_M2(:);
+        upper_M2_v = upper_M2(:);
+        M1d_v      = M1d(:);        % (nt  x 1)
+
+        lxy_mat  = reshape(lxy,  nx, ny);
+        lxy2_mat = reshape(lxy2, nx, ny);
+
+        Tk_L = cell(nx, ny);
+        Tk_U = cell(nx, ny);
+        Tk_P = cell(nx, ny);
+
+        for kx = 1:nx
+            for ky = 1:ny
+                if kx == 1 && ky == 1, continue; end   % DC mode handled via DCT-t
+                l  = lxy_mat(kx, ky);
+                l2 = lxy2_mat(kx, ky);
+                lo = lower_M0_v + l2 .* lower_M2_v;
+                ma = main_M0_v  + l  .* M1d_v + l2 .* main_M2_v;
+                up = upper_M0_v + l2 .* upper_M2_v;
+                Tk = diag(lo, -1) + diag(ma) + diag(up, 1);
+                [Tk_L{kx,ky}, Tk_U{kx,ky}, Tk_P{kx,ky}] = lu(sparse(Tk));
+            end
+        end
+        bp.Tk_L = Tk_L;
+        bp.Tk_U = Tk_U;
+        bp.Tk_P = Tk_P;
+    else
+        % Vectorised diagonals for all (kx, ky) modes (Thomas path)
+        bp.lower_all = lower_M0 + lxy2 .* lower_M2;               % (ntm x nx x ny)
+        bp.main_all  = main_M0  + lxy  .* M1d + lxy2 .* main_M2;  % (nt  x nx x ny)
+        bp.upper_all = upper_M0 + lxy2 .* upper_M2;               % (ntm x nx x ny)
+
+        % Mode (1,1): lxy=0, T=M0 is singular.  Set main diagonal to 1 so Thomas
+        % gives 0 for a zero RHS; proj_fokker_planck_banded overwrites this mode.
+        bp.main_all(:, 1, 1) = 1;
+    end
 end

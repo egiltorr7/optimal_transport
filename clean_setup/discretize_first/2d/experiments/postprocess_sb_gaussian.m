@@ -21,9 +21,9 @@ if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 sel.nt  = 64;      % e.g. 64
 sel.nx  = 128;      % e.g. 128
 sel.ny  = 128;      %e.g. 128
-sel.eps = 0;      % e.g. 0.01
-sel.gam = [];      % e.g. 100
-sel.tau = [];      % e.g. 101
+sel.eps = 0.0;      % e.g. 0.01
+sel.gam = 0.1;      % e.g. 100
+sel.tau = 0.11;      % e.g. 101
 
 mats = dir(fullfile(res_dir, 'result_*.mat'));
 if isempty(mats)
@@ -71,6 +71,14 @@ rho_num_cc = result.rho_cc;
 fprintf('  Grid: nt=%d  nx=%d  ny=%d  eps=%.4g\n', nt, nx, ny, cfg.vareps);
 fprintf('  iters=%d  converged=%d  error=%.2e  wall=%.1fs\n', ...
     result.iters, result.converged, result.error, result.walltime);
+if isfield(result, 'time_per_iter')
+    fprintf('  time/iter=%.3fs  throughput=%.1f iter/s\n', ...
+        result.time_per_iter, result.throughput);
+end
+if isfield(result, 'gpu_total_mb') && result.gpu_total_mb > 0
+    fprintf('  GPU mem: %.0f / %.0f MB used/total\n', ...
+        result.gpu_mem_post_mb, result.gpu_total_mb);
+end
 fprintf('  Kinetic energy: %.6f\n', obj);
 
 savefig = @(fig, name) exportgraphics(fig, ...
@@ -127,6 +135,36 @@ xlabel('x'); ylabel('\rho(t,x,y=0.5)');
 title(sprintf('x-slice at y=0.5   eps=%.4g', cfg.vareps));
 grid on;
 savefig(fig2, 'xslice');
+
+% -------------------------------------------------------------------------
+%% Figure 2b: diagonal slice along y = x (connects the two Gaussian centres)
+% -------------------------------------------------------------------------
+% Only meaningful when nx == ny (diagonal indices i==j)
+if nx == ny
+    % For each snapshot extract rho along the main diagonal i==j
+    fig2b = figure('Name', 'Diagonal slice y=x', 'Position', [50 1050 700 400]);
+    hold on;
+    leg_handles2 = gobjects(n_snap, 2);
+    for p = 1:n_snap
+        k = k_snap(p);
+        diag_ana = diag(squeeze(rho_ana_cc(k,:,:)));   % (nx x 1)
+        diag_num = diag(squeeze(rho_num_cc(k,:,:)));
+        leg_handles2(p,1) = plot(xx, diag_ana, '-',  'Color', colors(p,:), 'LineWidth', 1.5);
+        leg_handles2(p,2) = plot(xx, diag_num, 'o--','Color', colors(p,:), 'MarkerSize', 4);
+    end
+    leg_str2 = cell(n_snap, 2);
+    for p = 1:n_snap
+        k = k_snap(p);
+        leg_str2{p,1} = sprintf('Ana   t=%.2f', (k-0.5)*dt);
+        leg_str2{p,2} = sprintf('LADMM t=%.2f', (k-0.5)*dt);
+    end
+    legend(leg_handles2(:), leg_str2(:), 'Location', 'best', 'FontSize', 7);
+    xlabel('x  (along diagonal y=x)');
+    ylabel('\rho(t,x,y=x)');
+    title(sprintf('Diagonal slice y=x   eps=%.4g', cfg.vareps));
+    grid on;
+    savefig(fig2b, 'diagslice');
+end
 
 % -------------------------------------------------------------------------
 %% Figure 3: momentum magnitude heatmaps + quiver at selected times
