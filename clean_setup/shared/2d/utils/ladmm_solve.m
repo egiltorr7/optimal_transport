@@ -87,15 +87,17 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
     stalled  = false;
     diverged = false;
 
+    % Sub-operation timing (filled only if print_every > 0, sampled at print points)
+    debug_timing = print_every > 0;
+    t_prox = 0;  t_ke = 0;  t_norm = 0;  t_ops = 0;
+
     t_start = tic;
     iter_times = zeros(min(max_iter, max(print_every, 1)), 1);  % ring buffer for iter timing
 
     if print_every > 0
-        fprintf('  [ADMM]  iter       residual      best res   sec/iter    ETA\n');
-        fprintf('  ---------------------------------------------------------------\n');
+        fprintf('  [ADMM]  iter       residual      best res   sec/iter  [prox / ke / norm / ops]    ETA\n');
+        fprintf('  --------------------------------------------------------------------------------------\n');
     end
-
-    t_last_print = tic;
 
     for t = 1:max_iter
 
@@ -104,24 +106,35 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
         By_prev = By;
 
         % --- x-subproblem (linearized) ---
+        if debug_timing, tw = tic; end
         r = s_sub(s_add(A_fn(x), By_prev), b);
         g = At_fn(s_sub(s_scale(gamma, r), delta));
         x = prox_f1(s_sub(x, s_scale(1/tau, g)), 1/tau);
+        if debug_timing, t_prox = t_prox + toc(tw); end
 
         % --- over-relaxation ---
+        if debug_timing, tw = tic; end
         Ax    = A_fn(x);
         z_hat = s_add(s_scale(alpha,       Ax), ...
                       s_scale(1 - alpha,   s_sub(b, By_prev)));
+        if debug_timing, t_ops = t_ops + toc(tw); end
 
         % --- y-subproblem (exact) ---
+        if debug_timing, tw = tic; end
         y  = solve_y(delta, z_hat);
         By = B_fn(y);
+        if debug_timing, t_ke = t_ke + toc(tw); end
 
         % --- dual update ---
+        if debug_timing, tw = tic; end
         delta = s_sub(delta, s_scale(gamma, s_sub(s_add(z_hat, By), b)));
+        if debug_timing, t_ops = t_ops + toc(tw); end
 
         % --- residual ---
+        if debug_timing, tw = tic; end
         residual(t) = norm_fn(s_sub(y, y_prev));
+        if debug_timing, t_norm = t_norm + toc(tw); end
+
         iter_times(mod(t-1, numel(iter_times))+1) = toc(t_iter_start);
 
         % --- NaN / Inf detection ---
@@ -155,6 +168,7 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
                 fprintf('  [ADMM]  %6d/%d   %10.3e   %10.3e   %7.3fs  CONVERGED\n', ...
                     t, max_iter, residual(end), best_res, sec_iter);
             end
+            t_prox = 0;  t_ke = 0;  t_norm = 0;  t_ops = 0;
             break;
         end
 
@@ -173,9 +187,13 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
             end
             stall_str = '';
             if stalled, stall_str = '  *** STALLED ***'; end
-            fprintf('  [ADMM]  %6d/%d   %10.3e   %10.3e   %7.3fs  ETA %s%s\n', ...
+            n = t;   % number of iters so far for per-iter averages
+            fprintf('  [ADMM]  %6d/%d   %10.3e   %10.3e   %7.3fs  [%.3f / %.3f / %.3f / %.3f]  ETA %s%s\n', ...
                 t, max_iter, residual(t), best_res, sec_iter, ...
+                t_prox/n, t_ke/n, t_norm/n, t_ops/n, ...
                 format_eta(remaining), stall_str);
+            % Reset accumulators for next window
+            t_prox = 0;  t_ke = 0;  t_norm = 0;  t_ops = 0;
         end
     end
 
