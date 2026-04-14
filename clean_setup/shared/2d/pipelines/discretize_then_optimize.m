@@ -146,6 +146,7 @@ function result = discretize_then_optimize(cfg, problem)
     admm_opts.max_iter = cfg.max_iter;
     admm_opts.tol      = cfg.tol;
     admm_opts.norm_fn  = norm_fn;
+    admm_opts.use_gpu  = use_gpu;
 
     % --- Solve ---
     % Snapshot GPU memory just before solve (all arrays allocated)

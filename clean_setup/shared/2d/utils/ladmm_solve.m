@@ -44,9 +44,12 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
 %     opts.norm_fn    @(v) -> scalar   norm for convergence (default: struct norm)
 %
 %   Optional opts fields:
-%     opts.print_every  print progress every N iterations (default 100, 0 = silent)
-%     opts.stall_window number of iters to look back for stall detection (default 50)
-%     opts.stall_tol    residual must decrease by this factor or it's a stall (default 0.999)
+%     opts.print_every   print progress every N iterations (default 100, 0 = silent)
+%     opts.stall_window  number of iters to look back for stall detection (default 50)
+%     opts.stall_tol     residual must decrease by this factor or it's a stall (default 0.999)
+%     opts.use_gpu       set true to enable periodic GPU sync (default false)
+%     opts.gpu_sync_every  call wait(gpuDevice()) every N iters to prevent memory fragmentation
+%                          (default 500, only used when use_gpu=true)
 %
 %   Outputs:
 %     x, y      primal variables at termination
@@ -63,9 +66,11 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
     alpha        = get_opt(opts, 'alpha',        1.0);
     max_iter     = opts.max_iter;
     tol          = opts.tol;
-    print_every  = get_opt(opts, 'print_every',  100);
-    stall_window = get_opt(opts, 'stall_window', 50);
-    stall_tol    = get_opt(opts, 'stall_tol',    0.999);
+    print_every    = get_opt(opts, 'print_every',    100);
+    stall_window   = get_opt(opts, 'stall_window',   50);
+    stall_tol      = get_opt(opts, 'stall_tol',      0.999);
+    use_gpu        = get_opt(opts, 'use_gpu',         false);
+    gpu_sync_every = get_opt(opts, 'gpu_sync_every',  500);
 
     if isfield(opts, 'norm_fn')
         norm_fn = opts.norm_fn;
@@ -128,6 +133,11 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
                 fprintf('  [ADMM]  Possible cause: Thomas instability (eps/dt > 1). Try proj_fokker_planck_spike2.\n');
             end
             break;
+        end
+
+        % --- periodic GPU sync: flush command queue to prevent memory fragmentation ---
+        if use_gpu && mod(t, gpu_sync_every) == 0
+            wait(gpuDevice());
         end
 
         % --- stall detection: residual not decreasing over stall_window iters ---
