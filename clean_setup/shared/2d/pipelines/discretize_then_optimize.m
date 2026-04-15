@@ -74,11 +74,13 @@ function result = discretize_then_optimize(cfg, problem)
             problem.banded_proj.main_all  = gpuArray(problem.banded_proj.main_all);
             problem.banded_proj.upper_all = gpuArray(problem.banded_proj.upper_all);
         elseif isequal(cfg.projection, @proj_fokker_planck_spike2)
-            problem.banded_proj.lower_all    = gpuArray(problem.banded_proj.lower_all);
-            problem.banded_proj.main_all     = gpuArray(problem.banded_proj.main_all);
-            problem.banded_proj.upper_all    = gpuArray(problem.banded_proj.upper_all);
-            problem.banded_proj.spike_pivots = gpuArray(problem.banded_proj.spike_pivots);
-            problem.banded_proj.spike_v      = gpuArray(problem.banded_proj.spike_v);
+            problem.banded_proj.lower_all        = gpuArray(problem.banded_proj.lower_all);
+            problem.banded_proj.main_all         = gpuArray(problem.banded_proj.main_all);
+            problem.banded_proj.upper_all        = gpuArray(problem.banded_proj.upper_all);
+            problem.banded_proj.spike_pivots     = gpuArray(problem.banded_proj.spike_pivots);
+            problem.banded_proj.spike_v          = gpuArray(problem.banded_proj.spike_v);
+            problem.banded_proj.thomas_mults     = gpuArray(problem.banded_proj.thomas_mults);
+            problem.banded_proj.spike_pivots_inv = gpuArray(problem.banded_proj.spike_pivots_inv);
         end
     end
 

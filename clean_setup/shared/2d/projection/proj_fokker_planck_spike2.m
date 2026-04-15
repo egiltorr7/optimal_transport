@@ -103,24 +103,26 @@ function phi_hat = spike2_solve(bp, f_hat, nt, nx, ny)
 %   Correction:             x1 = z - x2 * bp.spike_v
 %
 %   All sweeps are element-wise over (nx x ny) — fully GPU-vectorised.
+%   Uses bp.thomas_mults and bp.spike_pivots_inv (precomputed) to replace
+%   per-step divisions with multiplies, reducing GPU temporaries per step.
 
     ntm = nt - 1;
 
-    lo1 = bp.lower_all(1:nt-2, :, :);   % lower diag of T1  (nt-2 x nx x ny)
-    up1 = bp.upper_all(1:nt-2, :, :);   % upper diag of T1  (nt-2 x nx x ny)
-    b   = bp.spike_pivots;               % precomputed modified pivots  (nt-1 x nx x ny)
+    up1   = bp.upper_all(1:nt-2, :, :);   % upper diag of T1        (nt-2 x nx x ny)
+    w     = bp.thomas_mults;               % lo1(i-1) / b(i-1)       (nt-2 x nx x ny)
+    binv  = bp.spike_pivots_inv;           % 1 / spike_pivots         (nt-1 x nx x ny)
 
-    % --- Step 1: Thomas on T1 — RHS forward sweep (pivots already in b) ---
+    % --- Step 1: Thomas on T1 — RHS forward sweep ---
     d = f_hat(1:ntm, :, :);
     for i = 2:ntm
-        d(i,:,:) = d(i,:,:) - (lo1(i-1,:,:) ./ b(i-1,:,:)) .* d(i-1,:,:);
+        d(i,:,:) = d(i,:,:) - w(i-1,:,:) .* d(i-1,:,:);
     end
 
     % Back-substitution: z = T1^{-1} * f[1:nt-1]
     z = zeros(ntm, nx, ny, 'like', f_hat);
-    z(ntm,:,:) = d(ntm,:,:) ./ b(ntm,:,:);
+    z(ntm,:,:) = d(ntm,:,:) .* binv(ntm,:,:);
     for i = ntm-1:-1:1
-        z(i,:,:) = (d(i,:,:) - up1(i,:,:) .* z(i+1,:,:)) ./ b(i,:,:);
+        z(i,:,:) = (d(i,:,:) - up1(i,:,:) .* z(i+1,:,:)) .* binv(i,:,:);
     end
 
     % --- Step 2: Schur complement for x(nt) ---
@@ -128,14 +130,12 @@ function phi_hat = spike2_solve(bp, f_hat, nt, nx, ny)
     ma_nt = bp.main_all(nt,   :, :);   % T(nt, nt)      (1 x nx x ny)
     v     = bp.spike_v;                 % spike vector   (nt-1 x nx x ny)
 
-    % S = T(nt,nt) - T(nt,nt-1)*v(nt-1)  — Schur complement, > 0 for all modes
-    S   = ma_nt - lo_c .* v(ntm,:,:);
-    x2  = (f_hat(nt,:,:) - lo_c .* z(ntm,:,:)) ./ S;   % (1 x nx x ny)
+    S  = ma_nt - lo_c .* v(ntm,:,:);
+    x2 = (f_hat(nt,:,:) - lo_c .* z(ntm,:,:)) ./ S;   % (1 x nx x ny)
 
     % --- Step 3: Correct Block 1 ---
-    x1 = z - x2 .* v;   % (nt-1 x nx x ny), broadcasting x2 over time dim
+    x1 = z - x2 .* v;   % (nt-1 x nx x ny)
 
-    % --- Assemble full solution ---
     phi_hat = cat(1, x1, x2);   % (nt x nx x ny)
 end
 
@@ -143,30 +143,30 @@ end
 
 function f_hat = dct2_xy(f, nt, nx, ny)
 % DCT-II along dim 2 (x) and dim 3 (y) of a (nt x nx x ny) array.
-    f2 = permute(f, [2, 1, 3]);
-    f2 = reshape(f2, nx, nt*ny);
-    f2 = dct(f2);
-    f2 = reshape(f2, nx, nt, ny);
-    f2 = permute(f2, [2, 1, 3]);
-
-    f3 = permute(f2, [3, 1, 2]);
-    f3 = reshape(f3, ny, nt*nx);
-    f3 = dct(f3);
-    f3 = reshape(f3, ny, nt, nx);
-    f_hat = permute(f3, [2, 3, 1]);
+% Uses a single accumulator variable so only one large temporary is live
+% at a time, reducing GPU memory fragmentation across repeated calls.
+    f_hat = permute(f, [2, 1, 3]);       % (nx x nt x ny)
+    f_hat = reshape(f_hat, nx, nt*ny);   % (nx x nt*ny)
+    f_hat = dct(f_hat);
+    f_hat = reshape(f_hat, nx, nt, ny);  % (nx x nt x ny)
+    f_hat = permute(f_hat, [2, 1, 3]);   % (nt x nx x ny)
+    f_hat = permute(f_hat, [3, 1, 2]);   % (ny x nt x nx)
+    f_hat = reshape(f_hat, ny, nt*nx);   % (ny x nt*nx)
+    f_hat = dct(f_hat);
+    f_hat = reshape(f_hat, ny, nt, nx);  % (ny x nt x nx)
+    f_hat = permute(f_hat, [2, 3, 1]);   % (nt x nx x ny)
 end
 
 function f = idct2_xy(f_hat, nt, nx, ny)
 % IDCT-II along dim 2 (x) and dim 3 (y) of a (nt x nx x ny) array.
-    f3 = permute(f_hat, [3, 1, 2]);
-    f3 = reshape(f3, ny, nt*nx);
-    f3 = idct(f3);
-    f3 = reshape(f3, ny, nt, nx);
-    f2 = permute(f3, [2, 3, 1]);
-
-    f2 = permute(f2, [2, 1, 3]);
-    f2 = reshape(f2, nx, nt*ny);
-    f2 = idct(f2);
-    f2 = reshape(f2, nx, nt, ny);
-    f  = permute(f2, [2, 1, 3]);
+    f = permute(f_hat, [3, 1, 2]);   % (ny x nt x nx)
+    f = reshape(f, ny, nt*nx);
+    f = idct(f);
+    f = reshape(f, ny, nt, nx);      % (ny x nt x nx)
+    f = permute(f, [2, 3, 1]);       % (nt x nx x ny)
+    f = permute(f, [2, 1, 3]);       % (nx x nt x ny)
+    f = reshape(f, nx, nt*ny);
+    f = idct(f);
+    f = reshape(f, nx, nt, ny);      % (nx x nt x ny)
+    f = permute(f, [2, 1, 3]);       % (nt x nx x ny)
 end

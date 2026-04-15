@@ -74,4 +74,14 @@ function bp = precomp_banded_proj_spike2(problem, vareps)
         spike_v(i,:,:) = -(up1(i,:,:) .* spike_v(i+1,:,:)) ./ b(i,:,:);
     end
     bp.spike_v = spike_v;   % (nt-1 x nx x ny)
+
+    % --- Precomputed multipliers for the forward sweep ---
+    %   thomas_mults(i,:,:) = lo1(i,:,:) / b(i,:,:)  for i = 1..nt-2
+    %   Used in place of the live division in spike2_solve's forward loop.
+    bp.thomas_mults = lo1 ./ b(1:nt-2, :, :);   % (nt-2 x nx x ny)
+
+    % --- Reciprocal pivots for the back-substitution ---
+    %   spike_pivots_inv(i,:,:) = 1 / b(i,:,:)  for i = 1..nt-1
+    %   Replaces the per-step division with a multiply.
+    bp.spike_pivots_inv = 1 ./ b;   % (nt-1 x nx x ny)
 end
