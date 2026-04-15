@@ -9,7 +9,6 @@
 %     Both flat            -> drift only appears at larger grid sizes (memory pressure)
 
 clear; close all;
-set(0, 'defaultFigureVisible', 'off');   % safe in headless / nodisplay mode
 run(fullfile(fileparts(mfilename('fullpath')), '..', 'setup_paths.m'));
 
 fig_dir = fullfile(fileparts(mfilename('fullpath')), '..', 'results', 'figures');
@@ -54,32 +53,34 @@ else
     t_gpu = [];
 end
 
-%% --- Plot ---
-figure('Name', 'Timing drift: CPU vs GPU', 'Position', [100 100 800 380]);
-hold on;
-
+%% --- Fit trends ---
 iters = (1:numel(t_cpu))';
-plot(iters, t_cpu * 1000, 'b-', 'LineWidth', 1.2, 'DisplayName', 'CPU');
-
-p_cpu   = polyfit(iters, t_cpu * 1000, 1);
-plot(iters, polyval(p_cpu, iters), 'b--', 'LineWidth', 0.8, ...
-    'DisplayName', sprintf('CPU fit  slope=%.3f ms/iter', p_cpu(1)));
+p_cpu = polyfit(iters, t_cpu * 1000, 1);
 
 if ~isempty(t_gpu)
     iters_g = (1:numel(t_gpu))';
-    plot(iters_g, t_gpu * 1000, 'r-', 'LineWidth', 1.2, 'DisplayName', 'GPU');
-    p_gpu = polyfit(iters_g, t_gpu * 1000, 1);
-    plot(iters_g, polyval(p_gpu, iters_g), 'r--', 'LineWidth', 0.8, ...
-        'DisplayName', sprintf('GPU fit  slope=%.3f ms/iter', p_gpu(1)));
+    p_gpu   = polyfit(iters_g, t_gpu * 1000, 1);
 end
 
-xlabel('Iteration');
-ylabel('ms / iter');
-title(sprintf('Per-iteration time   nt=%d nx=%d ny=%d', ...
-    cfg_base.nt, cfg_base.nx, cfg_base.ny));
-legend('Location', 'northwest');
-grid on;
-saveas(gcf, fullfile(fig_dir, 'timing_drift.png'));
+%% --- Plot (interactive mode only) ---
+if usejava('desktop') && ~isempty(getenv('DISPLAY'))
+    figure('Name', 'Timing drift: CPU vs GPU', 'Position', [100 100 800 380]);
+    hold on;
+    plot(iters, t_cpu * 1000, 'b-', 'LineWidth', 1.2, 'DisplayName', 'CPU');
+    plot(iters, polyval(p_cpu, iters), 'b--', 'LineWidth', 0.8, ...
+        'DisplayName', sprintf('CPU fit  slope=%.3f ms/iter', p_cpu(1)));
+    if ~isempty(t_gpu)
+        plot(iters_g, t_gpu * 1000, 'r-', 'LineWidth', 1.2, 'DisplayName', 'GPU');
+        plot(iters_g, polyval(p_gpu, iters_g), 'r--', 'LineWidth', 0.8, ...
+            'DisplayName', sprintf('GPU fit  slope=%.3f ms/iter', p_gpu(1)));
+    end
+    xlabel('Iteration'); ylabel('ms / iter');
+    title(sprintf('Per-iteration time   nt=%d nx=%d ny=%d', ...
+        cfg_base.nt, cfg_base.nx, cfg_base.ny));
+    legend('Location', 'northwest'); grid on;
+    saveas(gcf, fullfile(fig_dir, 'timing_drift.png'));
+    fprintf('Figure saved to %s/timing_drift.png\n', fig_dir);
+end
 
 %% --- Diagnosis ---
 fprintf('\n--- Diagnosis ---\n');
