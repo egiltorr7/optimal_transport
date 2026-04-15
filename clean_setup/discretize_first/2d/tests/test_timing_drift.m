@@ -9,6 +9,7 @@
 %     Both flat            -> drift only appears at larger grid sizes (memory pressure)
 
 clear; close all;
+set(0, 'defaultFigureVisible', 'off');   % safe in headless / nodisplay mode
 run(fullfile(fileparts(mfilename('fullpath')), '..', 'setup_paths.m'));
 
 fig_dir = fullfile(fileparts(mfilename('fullpath')), '..', 'results', 'figures');
@@ -16,9 +17,9 @@ if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 
 %% --- Small fixed config ---
 cfg_base             = cfg_ladmm_gaussian();
-cfg_base.nt          = 32;
-cfg_base.nx          = 32;
-cfg_base.ny          = 32;
+cfg_base.nt          = 64;   % use production grid to reproduce drift
+cfg_base.nx          = 64;
+cfg_base.ny          = 64;
 cfg_base.max_iter    = 500;
 cfg_base.tol         = 0;       % run all 500 iters — never stop early
 cfg_base.print_every = 0;       % suppress output
