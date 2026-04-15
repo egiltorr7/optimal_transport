@@ -26,8 +26,10 @@ function problem = setup_problem(cfg, prob_def)
     % Boundary densities from problem definition
     rho0 = prob_def.rho0_func(problem.xx);
     rho1 = prob_def.rho1_func(problem.xx);
-    problem.rho0 = rho0 / sum(rho0);
-    problem.rho1 = rho1 / sum(rho1);
+    problem.rho0_pdf = rho0;              % raw PDF from prob_def (integrates to ~1 over R)
+    problem.rho1_pdf = rho1;
+    problem.rho0     = rho0 / sum(rho0); % discrete probability mass (sums to 1 over [0,1])
+    problem.rho1     = rho1 / sum(rho1);
 
     % Combined name for saving results
     problem.name = sprintf('%s_%s', prob_def.name, cfg.name);

@@ -92,7 +92,8 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
     t_prox = 0;  t_ke = 0;  t_norm = 0;  t_ops = 0;
 
     t_start = tic;
-    iter_times = zeros(min(max_iter, max(print_every, 1)), 1);  % ring buffer for iter timing
+    iter_times     = zeros(max_iter, 1);   % full per-iter wall times (always stored)
+    iter_times_win = zeros(max(print_every, 1), 1);  % ring buffer for print window average
 
     if print_every > 0
         fprintf('  [ADMM]  iter       residual      best res   sec/iter  [prox / ke / norm / ops]    ETA\n');
@@ -135,7 +136,8 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
         residual(t) = norm_fn(s_sub(y, y_prev));
         if debug_timing, t_norm = t_norm + toc(tw); end
 
-        iter_times(mod(t-1, numel(iter_times))+1) = toc(t_iter_start);
+        iter_times(t) = toc(t_iter_start);
+        iter_times_win(mod(t-1, numel(iter_times_win))+1) = iter_times(t);
 
         % --- NaN / Inf detection ---
         if ~isfinite(residual(t))
@@ -164,7 +166,7 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
             residual = residual(1:t);
             if print_every > 0
                 best_res = min(residual);
-                sec_iter = mean(iter_times(iter_times > 0));
+                sec_iter = mean(iter_times_win(iter_times_win > 0));
                 fprintf('  [ADMM]  %6d/%d   %10.3e   %10.3e   %7.3fs  CONVERGED\n', ...
                     t, max_iter, residual(end), best_res, sec_iter);
             end
@@ -175,7 +177,7 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
         % --- periodic progress print ---
         if print_every > 0 && mod(t, print_every) == 0
             best_res = min(residual(1:t));
-            sec_iter = mean(iter_times(iter_times > 0));
+            sec_iter = mean(iter_times_win(iter_times_win > 0));
             remaining = (max_iter - t) * sec_iter;
             % Estimate ETA from convergence rate (geometric decay over stall_window)
             if t > stall_window && residual(t) > 0 && residual(t - stall_window) > 0
@@ -197,12 +199,13 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
         end
     end
 
-    info.residual  = residual;
-    info.iters     = length(residual);
-    info.converged = ~diverged && residual(end) < tol;
-    info.stalled   = stalled && ~info.converged;
-    info.diverged  = diverged;
-    info.walltime  = toc(t_start);
+    info.residual   = residual;
+    info.iters      = length(residual);
+    info.converged  = ~diverged && residual(end) < tol;
+    info.stalled    = stalled && ~info.converged;
+    info.diverged   = diverged;
+    info.walltime   = toc(t_start);
+    info.iter_times = iter_times(1:info.iters);   % per-iteration wall times (s)
 end
 
 %% -----------------------------------------------------------------------

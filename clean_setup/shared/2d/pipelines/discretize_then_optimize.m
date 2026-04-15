@@ -178,11 +178,12 @@ function result = discretize_then_optimize(cfg, problem)
     result.rho_cc    = y.rho;
     result.mx_cc     = y.mx;
     result.my_cc     = y.my;
-    result.residual  = info.residual;
-    result.iters     = info.iters;
-    result.converged = info.converged;
-    result.error     = info.residual(end);
-    result.walltime  = info.walltime;
+    result.residual   = info.residual;
+    result.iters      = info.iters;
+    result.converged  = info.converged;
+    result.error      = info.residual(end);
+    result.walltime   = info.walltime;
+    result.iter_times = info.iter_times;
     result.cfg       = cfg;
 
     % Computational cost metrics
