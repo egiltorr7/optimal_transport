@@ -21,7 +21,7 @@ if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 sel.nt  = 64;      % e.g. 64
 sel.nx  = 128;      % e.g. 128
 sel.ny  = 128;      %e.g. 128
-sel.eps = 0.0;      % e.g. 0.01
+sel.eps = 1e-1;      % e.g. 0.01
 sel.gam = 0.1;      % e.g. 100
 sel.tau = 0.11;      % e.g. 101
 

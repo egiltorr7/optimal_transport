@@ -92,16 +92,24 @@ if ~isempty(t_gpu)
     fprintf('  GPU slope: %.3f ms/iter  (%.1f%% growth over 500 iters)\n', ...
         p_gpu(1), slope_gpu_pct);
 
+    gpu_time_total = sum(res_gpu.iter_times);
     if abs(slope_cpu_pct) < 10 && slope_gpu_pct > 20
         fprintf('\n  -> CPU flat, GPU grows.\n');
-        fprintf('     Cause: GPU thermal throttling or CUDA context state accumulation.\n');
+        fprintf('     Cause: GPU thermal throttling or CUDA context accumulation.\n');
+        fprintf('     Fix: loosen tol (e.g. 1e-6), or add pauses to let GPU cool.\n');
     elseif slope_cpu_pct > 20 && slope_gpu_pct > 20
         fprintf('\n  -> Both CPU and GPU grow.\n');
-        fprintf('     Cause: struct allocation / GC overhead in the algorithm itself.\n');
+        fprintf('     Cause: struct/GC overhead in the algorithm itself.\n');
         fprintf('     Fix: pre-allocate intermediate arrays before the ADMM loop.\n');
     else
-        fprintf('\n  -> Both approximately flat at this grid size.\n');
-        fprintf('     Drift may only appear at your production grid size (memory pressure).\n');
-        fprintf('     Try re-running with nt=64, nx=64, ny=64 to reproduce.\n');
+        fprintf('\n  -> Both flat over %d iters (%.0fs of GPU compute).\n', ...
+            cfg_base.max_iter, gpu_time_total);
+        if gpu_time_total < 30
+            fprintf('     Run too short to trigger thermal throttling (need >60s).\n');
+            fprintf('     Drift in your long runs is almost certainly thermal throttling.\n');
+            fprintf('     To confirm here: increase cfg_base.max_iter to 2000 and re-run.\n');
+        else
+            fprintf('     Algorithm is clean. Any drift in longer runs is thermal throttling.\n');
+        end
     end
 end

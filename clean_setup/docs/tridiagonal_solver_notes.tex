@@ -1,0 +1,397 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\geometry{margin=1.1in}
+
+\newcommand{\eps}{\varepsilon}
+\newcommand{\dt}{\Delta t}
+\newcommand{\dx}{\Delta x}
+\newcommand{\dy}{\Delta y}
+\newcommand{\RR}{\mathbb{R}}
+\newcommand{\lxy}{\lambda_{kx,ky}}
+
+\title{Tridiagonal Solver for the Fokker--Planck Projection:\\
+       Formulation, Options Explored, and Open Challenges}
+\author{Optimal Transport / Schr\"odinger Bridge Project}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+The central computational bottleneck in our linearized ADMM solver for the 2D (and 3D)
+Schr\"odinger bridge problem is projecting onto the Fokker--Planck constraint.
+After a 2D DCT in the spatial directions, this projection reduces to solving
+$n_x \times n_y$ independent tridiagonal systems of size $n_t \times n_t$ in the time direction.
+This note documents the structure of these systems, the solvers we have tried, the
+instability we encountered for $\eps/\dt > 1$, and the current state of the implementation.
+\end{abstract}
+
+%------------------------------------------------------------------------------
+\section{Problem Setup}
+%------------------------------------------------------------------------------
+
+We solve the dynamic Schr\"odinger bridge (SB) / optimal transport (OT) problem on
+$[0,T] \times [0,1]^2$ via the following saddle-point formulation (Benamou--Brenier with diffusion):
+\begin{align}
+  \min_{\rho,\, m_x,\, m_y} \quad & \iint \frac{|m|^2}{2\rho} \, dx\, dy\, dt \\
+  \text{s.t.} \quad
+  & \partial_t \rho + \partial_x m_x + \partial_y m_y = \eps \Delta \rho, \notag \\
+  & \rho(0,\cdot) = \rho_0,\quad \rho(T,\cdot) = \rho_1. \notag
+\end{align}
+The parameter $\eps \geq 0$ controls the entropic regularisation: $\eps = 0$ gives
+classical OT, $\eps > 0$ gives the SB.
+
+We discretise on a staggered (MAC) grid with $n_t$ time cells, $n_x$ and $n_y$ spatial
+cells, and step sizes $\dt = T/n_t$, $\dx = 1/n_x$, $\dy = 1/n_y$.
+The ADMM splitting separates:
+\begin{itemize}
+  \item $x$-variable $(\rho, m_x, m_y)$ on the staggered grid: subject to the FP constraint.
+  \item $y$-variable $(\rho, m_x, m_y)$ on the cell-centre grid: subject to the kinetic
+        energy (KE) proximal step.
+\end{itemize}
+The $x$-update requires projection onto the affine Fokker--Planck constraint set, which
+is the core computational challenge discussed here.
+
+%------------------------------------------------------------------------------
+\section{The FP Projection and the Linear System $AA^* \phi = f$}
+%------------------------------------------------------------------------------
+
+The FP projection is formulated via its dual potential $\phi \in \RR^{n_t \times n_x \times n_y}$.
+Given the FP residual $f = \partial_t \mu + \partial_x \psi_x + \partial_y \psi_y - \eps \Delta \mu$,
+the projection solves:
+\begin{equation}
+  A A^* \phi = f,
+\end{equation}
+where $A$ is the (space-time) FP operator and $A^*$ its adjoint, and then corrects
+$(\mu, \psi_x, \psi_y)$ via:
+\begin{align}
+  \rho_{\mathrm{out}} &= \mu + \partial_t^* \phi + \eps \, \nabla^* (\nabla \phi), \\
+  m_{x,\mathrm{out}} &= \psi_x + \partial_x^* \phi, \qquad
+  m_{y,\mathrm{out}} = \psi_y + \partial_y^* \phi.
+\end{align}
+
+\subsection{Decoupling Under 2D DCT}
+
+The key structural observation is that $AA^*$ decouples in the spatial directions under
+the 2D DCT-II (which diagonalises the Neumann Laplacian on $[0,1]^2$).
+Writing $\hat{\phi}_{k_x, k_y}(t)$ for the 2D DCT coefficients indexed by spatial modes
+$(k_x, k_y) \in \{1,\ldots,n_x\} \times \{1,\ldots,n_y\}$, the system becomes
+$n_x \times n_y$ independent problems:
+\begin{equation}
+  T_{k_x, k_y} \, \hat{\phi}_{k_x,k_y} = \hat{f}_{k_x, k_y},
+  \qquad (k_x, k_y) \in \{1,\ldots,n_x\} \times \{1,\ldots,n_y\},
+\end{equation}
+where $T_{k_x,k_y}$ is an $n_t \times n_t$ matrix depending only on the combined
+spatial eigenvalue
+\begin{equation}
+  \lxy = \lambda_x(k_x) + \lambda_y(k_y),
+  \qquad \lambda_x(k) = \frac{2 - 2\cos(\pi (k-1) \dx)}{\dx^2},
+\end{equation}
+and similarly for $\lambda_y$.
+
+\subsection{Structure of $T_{k_x,k_y}$}
+
+The matrix $T_{k_x,k_y}$ is \textbf{tridiagonal} and has the form:
+\begin{equation}
+  T_{k_x,k_y} = M_0 + \lxy \cdot \mathrm{diag}(d) + \lxy^2 \cdot M_2,
+\end{equation}
+where $M_0$, $M_2$ are tridiagonal and $d \in \RR^{n_t}$ is diagonal, all arising from
+the time-direction finite-difference operators:
+\begin{align}
+  M_0 &= -D_t^{\phi} D_t^{\rho} && \text{(pure time second difference)}, \\
+  M_2 &= \eps^2 \, I_t^{\phi} I_t^{\rho} && \text{(time averaging, scaled by } \eps^2 \text{)}, \\
+  d_i &= 1 \quad \text{for } i = 2,\ldots,n_t - 1.
+\end{align}
+The boundary entries of $d$ are special and arise from the cross-term $D_t^{\phi} I_t^{\rho} - I_t^{\phi} D_t^{\rho}$:
+\begin{equation}
+  \boxed{d_1 = 1 + \frac{\eps}{\dt}, \qquad d_{n_t} = 1 - \frac{\eps}{\dt}.}
+\end{equation}
+Both interior entries ($d_2, \ldots, d_{n_t-1} = 1$) and $d_1 \geq 1$ are always
+positive and bounded away from zero for all $\lxy \geq 0$.
+However, $d_{n_t} = 1 - \eps/\dt$ \textbf{changes sign} when $\eps > \dt$, i.e.\
+when $\eps \cdot n_t > T$.
+
+\textbf{Special case: DC mode $(k_x = 1, k_y = 1)$.}
+Here $\lxy = 0$ and $T_{1,1} = M_0$, which is singular (it has a constant null vector
+since $M_0$ represents a second time-difference with no restoring term).
+This mode is handled separately by a 1D DCT in time, using the eigenvalues $\lambda_t(k)$.
+
+%------------------------------------------------------------------------------
+\section{Solver Options Explored}
+%------------------------------------------------------------------------------
+
+\subsection{Option 1: Thomas Algorithm (TDMA) --- Current Default}
+
+\textbf{Algorithm.} Standard Gaussian elimination for tridiagonal systems with no pivoting.
+Forward sweep modifies the pivots:
+\[
+  b_i \leftarrow b_i - \frac{l_{i-1}}{b_{i-1}} u_{i-1}, \qquad i = 2, \ldots, n_t,
+\]
+followed by back-substitution.
+
+\textbf{Why Thomas?}
+The key reason for choosing Thomas over other methods is \textit{vectorisation over modes}.
+All $n_x \times n_y$ tridiagonal systems share the same sparsity structure and only differ
+in their diagonal values (via $\lxy$).
+Thomas can be batched: the $n_t$ sequential sweep steps each perform element-wise
+operations over a full $(n_x \times n_y)$ array, giving $O(n_t \cdot n_x n_y)$
+total work with no per-mode loop overhead.
+This is critical for GPU execution and scalability to 3D ($n_x n_y n_z$ modes).
+
+\textbf{Memory.}
+$O(n_t \times n_x \times n_y)$ -- linear in the number of unknowns.
+
+\textbf{Instability.}
+Thomas has no pivoting. When $d_{n_t} = 1 - \eps/\dt < 0$, the last main-diagonal
+pivot $b_{n_t}$ can become very small or negative after the forward sweep,
+causing catastrophic cancellation and NaN propagation.
+This occurs whenever $\eps \cdot n_t > T$, i.e.\ for \textit{any} fixed $\eps > 0$
+once the grid is fine enough ($n_t > T/\eps$).
+
+\subsection{Option 2: Per-Mode LU with Partial Pivoting}
+
+\textbf{Algorithm.}
+Compute $P L U = T_{k_x,k_y}$ for each mode using LAPACK's banded LU with partial
+pivoting. Solve via two triangular sweeps.
+
+\textbf{Correctness.}
+Partial pivoting guarantees stability regardless of $\eps/\dt$.
+This is what the 1D solver uses.
+
+\textbf{Why rejected for 2D/3D.}
+Requires iterating over all $n_x \times n_y$ modes in a MATLAB loop.
+At $128 \times 128 = 16{,}384$ modes, the loop overhead is prohibitive.
+More fundamentally, per-mode loops cannot run on a GPU (no vectorisation over modes).
+Memory cost $O(n_t^2 \times n_x n_y)$ also becomes catastrophic in 3D.
+
+\subsection{Option 3: \texttt{pagefun} with LU}
+
+\textbf{Idea.}
+MATLAB's \texttt{pagefun(@mldivide, T, f)} applies a dense or banded solve to each
+page of a 3D array on the GPU.
+
+\textbf{Why not pursued.}
+\texttt{pagefun} requires storing the full $n_t \times n_t$ matrix for each mode:
+memory cost $O(n_t^2 \times n_x n_y)$, which is $n_t$ times worse than Thomas.
+At $n_t = 64$, $n_x = n_y = 128$, this is $64^2 \times 128^2 \approx 4 \times 10^8$
+doubles $\approx 3.3$ GB just for the system matrices.
+For 3D this is completely infeasible.
+
+\subsection{Option 4: Parallel Cyclic Reduction (PCR)}
+
+\textbf{Idea.}
+PCR reduces the sequential depth of the tridiagonal solve from $O(n_t)$ to $O(\log n_t)$,
+enabling GPU parallelism in the time direction.
+Hybrid PCR-Thomas methods are standard in high-performance computing.
+
+\textbf{Why not pursued (yet).}
+Our Thomas implementation already parallelises \textit{across modes}, not \textit{within a mode}.
+The $O(n_t)$ sequential steps are each $O(n_x n_y)$ parallel operations.
+For moderate $n_t = 64$, PCR would reduce 64 sequential steps to 6 at the cost of
+$3\times$ more arithmetic and more complex indexing.
+The potential gain is real but secondary to fixing the instability.
+PCR also does not inherently add pivoting, so the $d_{n_t} < 0$ instability would persist.
+This remains a candidate for very large $n_t$.
+
+\subsection{Option 5: Spike Algorithm, $p = 2$ --- Current Implementation for $\eps/\dt > 1$}
+
+\textbf{Motivation.}
+The instability is localised to a single row: row $n_t$ of $T_{k_x,k_y}$, where
+$d_{n_t} = 1 - \eps/\dt$ is the problematic entry.
+Rows $1, \ldots, n_t - 1$ have main-diagonal contributions $d_i \cdot \lxy \geq 1$
+for all $i < n_t$ and all $\lxy \geq 0$, so $T_1 := T[1:n_t-1,\, 1:n_t-1]$
+is well-conditioned.
+
+\textbf{Algorithm.}
+Partition the system into two blocks:
+\begin{align}
+  \text{Block 1:} \quad & T_1 \in \RR^{(n_t-1)\times(n_t-1)}, \quad \text{well-conditioned (Thomas stable)} \\
+  \text{Block 2:} \quad & T[n_t, n_t] \in \RR, \quad \text{always positive (proved analytically)}
+\end{align}
+coupled by off-diagonal entries $u_{n_t-1} = T[n_t-1, n_t]$ and $l_{n_t-1} = T[n_t, n_t-1]$.
+
+\textbf{Why $T[n_t, n_t] > 0$ for all $\lxy \geq 0$ and all $\eps > 0$.}
+
+The corner entries of the building blocks are
+\[
+  M_0[n_t,n_t] = \frac{1}{\dt^2}, \qquad M_2[n_t,n_t] = \frac{\eps^2}{4}, \qquad d_{n_t} = 1 - \frac{\eps}{\dt},
+\]
+so
+\begin{equation} \label{eq:Tnn}
+  T[n_t,n_t] = \frac{1}{\dt^2} + \lxy\!\left(1 - \frac{\eps}{\dt}\right) + \lxy^2 \frac{\eps^2}{4}.
+\end{equation}
+This is an \emph{upward-opening parabola} in $\lxy$ (leading coefficient $\eps^2/4 > 0$).
+Let $u = \eps/\dt \geq 0$.  The vertex is at
+\[
+  \lxy^* = -\frac{1-u}{\eps^2/2} = \frac{2(u-1)}{\eps^2}.
+\]
+We consider two cases:
+
+\begin{itemize}
+  \item \textbf{Case $u \leq 1$ (i.e.\ $\eps \leq \dt$).}
+        Here $\lxy^* = 2(u-1)/\eps^2 \leq 0$, so the vertex lies outside $[0,\infty)$.
+        The minimum of $T[n_t,n_t]$ on $\lxy \geq 0$ is attained at $\lxy = 0$:
+        \[
+          \min_{\lxy \geq 0} T[n_t,n_t] = \frac{1}{\dt^2} > 0.
+        \]
+
+  \item \textbf{Case $u > 1$ (i.e.\ $\eps > \dt$).}
+        Here $\lxy^* > 0$, so the minimum is at the interior vertex.
+        Substituting $\lxy^*$ into~\eqref{eq:Tnn} and simplifying (using $\eps = u\dt$):
+        \begin{align*}
+          T[n_t,n_t](\lxy^*)
+          &= \frac{1}{\dt^2} - \frac{(u-1)^2}{\eps^2}
+           = \frac{1}{\dt^2} - \frac{(u-1)^2}{u^2\dt^2}
+           = \frac{u^2 - (u-1)^2}{u^2\dt^2}
+           = \frac{2u-1}{u^2\dt^2}.
+        \end{align*}
+        Since $u > 1$ implies $2u - 1 > 1 > 0$, we have $T[n_t,n_t](\lxy^*) > 0$.
+\end{itemize}
+
+In both cases $T[n_t,n_t] > 0$ for all $\lxy \geq 0$.
+Note: this argument applies to the raw diagonal entry~\eqref{eq:Tnn}.
+The quantity actually used in the solve is the \emph{Schur complement}
+\[
+  S = T[n_t,n_t] - l_{n_t-1} \cdot v_{n_t-1},
+\]
+where $v = T_1^{-1}(u_{n_t-1}\,e_{n_t-1})$ is the spike vector.
+$S > 0$ follows from positive definiteness of $T$ for $\lxy > 0$
+(since $T = AA^*$ has no null vectors at non-DC modes), which implies
+$S > 0$ as the Schur complement of the positive-definite block $T_1$.
+
+\textbf{When does Thomas fail?}
+Thomas forward sweep computes the modified pivot $b_{n_t}$ after eliminating row $n_t - 1$.
+The only entry with a sign hazard is $d_{n_t} = 1 - \eps/\dt$.
+Thomas becomes unstable (pivot $\to 0$ or changes sign) when $\eps/\dt \geq 1$,
+i.e.\ $\eps \geq \dt = T/n_t$.
+The Spike $p{=}2$ solver is therefore needed whenever $\eps \cdot n_t \geq T$.
+
+\textbf{Solve steps (precomputed quantities):}
+\begin{enumerate}
+  \item Precompute (once, before ADMM loop):
+    \begin{itemize}
+      \item \textit{Modified pivots} $b_i$ for $T_1$ via Thomas forward sweep (no RHS needed).
+      \item \textit{Spike vector} $v = T_1^{-1} (u_{n_t-1} \, e_{n_t-1})$ via back-substitution.
+      \item \textit{Thomas multipliers} $w_i = l_{i-1}/b_{i-1}$ for the forward sweep.
+      \item \textit{Reciprocal pivots} $1/b_i$ to replace divisions with multiplications.
+    \end{itemize}
+  \item At each ADMM iteration (RHS forward sweep only):
+    \begin{itemize}
+      \item Forward sweep: $d_i \leftarrow d_i - w_{i-1} \cdot d_{i-1}$.
+      \item Back-substitution: $z = T_1^{-1} f[1:n_t-1]$.
+      \item Schur complement: $S = T[n_t,n_t] - l_{n_t-1} \cdot v_{n_t-1}$, then $x_{n_t} = (f_{n_t} - l_{n_t-1} \cdot z_{n_t-1}) / S$.
+      \item Correction: $x[1:n_t-1] = z - x_{n_t} \cdot v$.
+    \end{itemize}
+\end{enumerate}
+All steps are vectorised element-wise over the $(n_x \times n_y)$ mode dimensions.
+Memory cost is $O(n_t \times n_x \times n_y)$, identical to Thomas.
+
+\textbf{Implementation files:}
+\begin{itemize}
+  \item \texttt{shared/2d/utils/precomp\_banded\_proj\_spike2.m} --- precomputation
+  \item \texttt{shared/2d/projection/proj\_fokker\_planck\_spike2.m} --- per-iteration solve
+\end{itemize}
+
+%------------------------------------------------------------------------------
+\section{Summary Table}
+%------------------------------------------------------------------------------
+
+\begin{center}
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{lllll}
+\toprule
+\textbf{Method} & \textbf{Stable?} & \textbf{GPU?} & \textbf{Memory} & \textbf{Status} \\
+\midrule
+Thomas (TDMA)         & Only $\eps/\dt \leq 1$ & Yes & $O(n_t \cdot n_l)$    & Default ($\eps$ small) \\
+Per-mode LU           & Yes                    & No  & $O(n_t^2 \cdot n_l)$  & Used in 1D only \\
+\texttt{pagefun} LU   & Yes                    & Yes & $O(n_t^2 \cdot n_l)$  & Rejected (memory) \\
+PCR                   & Conditional            & Yes & $O(n_t \cdot n_l)$    & Future work \\
+Spike $p=2$           & Yes (all $\eps$)        & Yes & $O(n_t \cdot n_l)$    & Default ($\eps/\dt > 1$) \\
+\bottomrule
+\end{tabular}
+\end{center}
+\noindent where $n_l = n_x \times n_y$ (2D) or $n_x \times n_y \times n_z$ (3D).
+
+%------------------------------------------------------------------------------
+\section{Current Challenges}
+%------------------------------------------------------------------------------
+
+\subsection{Slow Convergence at Moderate $\eps$}
+
+The ADMM convergence rate depends on the condition number of the problem.
+For moderate $\eps$ (e.g.\ $\eps = 0.1$ with $n_t = 64$, giving $\eps/\dt = 6.4$),
+the Spike solver is stable but convergence to tolerance $10^{-8}$ requires
+$\sim 5{,}000$--$10{,}000$ iterations.
+The residual decreases approximately geometrically but with a ratio close to 1
+(roughly halving every 1000 iterations).
+
+\textbf{Partial mitigation:} Setting $\texttt{tol} = 10^{-6}$ is sufficient for
+scientific accuracy at typical grid sizes; the solution is visually and
+quantitatively converged well before $10^{-8}$.
+
+\textbf{Open question:} Whether the slow convergence is intrinsic to the
+ADMM penalty parameters ($\gamma$, $\tau$) or to the conditioning of the
+FP projection itself for large $\eps/\dt$.
+
+\subsection{GPU Thermal Throttling on Long Runs}
+
+The GPU (NVIDIA A100) heats up under sustained compute.
+After approximately 60--90 seconds (around 1000--2000 iterations at the 64$^3$ grid),
+the hardware reduces its clock speed to stay below its thermal limit ($\sim 85^\circ$C),
+causing a gradual 3--8$\times$ slowdown in per-iteration time.
+
+This has been confirmed by timing diagnostics:
+\begin{itemize}
+  \item CPU timing is flat across all tested grid sizes and iteration counts.
+  \item GPU timing is flat for short runs ($<$ 500 iters, $\sim 15$s).
+  \item GPU timing drifts on long runs ($>$ 1000 iters, $>$ 30s).
+\end{itemize}
+This is a hardware constraint, not a code bug.
+\textbf{Practical fix:} Use $\texttt{tol} = 10^{-6}$ to terminate before severe throttling.
+
+\subsection{Extension to 3D}
+
+The current 2D pipeline supports extension to 3D ($n_x \times n_y \times n_z$ spatial grid)
+by:
+\begin{enumerate}
+  \item Replacing the 2D DCT-xy with a 3D DCT-xyz.
+  \item Replacing the spatial eigenvalue $\lxy = \lambda_x + \lambda_y$ with
+        $\lambda_{kx,ky,kz} = \lambda_x + \lambda_y + \lambda_z$.
+  \item The tridiagonal structure in time is unchanged.
+\end{enumerate}
+The Spike $p=2$ solver would apply directly. Memory cost scales as $O(n_t \times n_x \times n_y \times n_z)$, which is
+linear and feasible. The main new challenge is the $O(n_t \times (n_x n_y n_z))$ loop
+steps, each operating on arrays of size $n_x \times n_y \times n_z$ rather than $n_x \times n_y$.
+
+\subsection{Optimal Choice of $\gamma$ and $\tau$}
+
+The ADMM convergence guarantee requires $\tau > \gamma \|A\|^2$.
+Since $A$ is an averaging interpolation, $\|A\|^2 \leq 1$, so $\tau > \gamma$ suffices.
+Empirically, $\gamma = 0.1$ has been found effective for 2D, but the optimal
+$(\gamma, \tau)$ pair likely depends on $\eps$, grid size, and the specific marginals.
+Systematic tuning (e.g.\ via the spectral radius of the ADMM iteration map) remains
+open.
+
+%------------------------------------------------------------------------------
+\section{Relation to the Analytical Solution}
+%------------------------------------------------------------------------------
+
+For the Gaussian SB test case ($\mathcal{N}(1/3, \sigma^2) \to \mathcal{N}(2/3, \sigma^2)$
+in each spatial dimension, $\sigma = 0.05$), the numerical solver has been verified to
+match the closed-form analytical solution to $L^2$ error $\lesssim 10^{-4}$ at
+$n_t = n_x = n_y = 64$, $\eps = 1$.
+
+The boundary conditions (Neumann / zero-flux in space, prescribed marginals in time)
+are consistent with the SB on all of $\mathbb{R}^2$ when the marginals are concentrated
+far from the domain boundary (i.e.\ $\sigma \ll \min(\mu, 1-\mu) \approx 1/3$ here).
+For marginals close to the boundary or large $\eps$, the Neumann BCs impose reflecting
+behaviour that differs from the $\mathbb{R}^2$ solution.
+
+\end{document}
