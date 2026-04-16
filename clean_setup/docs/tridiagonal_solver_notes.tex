@@ -140,10 +140,48 @@ followed by back-substitution.
 The key reason for choosing Thomas over other methods is \textit{vectorisation over modes}.
 All $n_x \times n_y$ tridiagonal systems share the same sparsity structure and only differ
 in their diagonal values (via $\lxy$).
-Thomas can be batched: the $n_t$ sequential sweep steps each perform element-wise
-operations over a full $(n_x \times n_y)$ array, giving $O(n_t \cdot n_x n_y)$
-total work with no per-mode loop overhead.
+Thomas parallelises \emph{across modes, not within a mode}: each of the $n_t$ sequential
+sweep steps performs a single element-wise operation over the full $(n_x \times n_y)$ array
+of modes simultaneously.
+For example, step $i$ of the forward sweep is:
+\[
+  b_i^{(k_x, k_y)} \;\leftarrow\;
+  b_i^{(k_x,k_y)} - \frac{l_{i-1}^{(k_x,k_y)}}{b_{i-1}^{(k_x,k_y)}} \, u_{i-1}^{(k_x,k_y)},
+  \qquad \forall\; (k_x, k_y),
+\]
+which is a single GPU kernel over an $(n_x \times n_y)$ array.
+There are $n_t$ such sequential steps, but each is fully parallel over all modes.
+Total work is $O(n_t \cdot n_x n_y)$ with no per-mode loop overhead.
 This is critical for GPU execution and scalability to 3D ($n_x n_y n_z$ modes).
+
+To see why the alternatives fail:
+\begin{itemize}
+  \item \textbf{Per-mode LU} solves one mode at a time in a sequential MATLAB loop.
+        Each solve is a tiny $n_t \times n_t$ system; the GPU sits mostly idle, paying
+        kernel launch overhead $n_x n_y$ times for almost no arithmetic per launch.
+  \item \textbf{\texttt{pagefun} LU} does launch all $n_x n_y$ solves in parallel, but
+        requires storing the full dense $n_t \times n_t$ matrix for every mode
+        simultaneously (it cannot exploit the tridiagonal structure), giving
+        $O(n_t^2 \times n_x n_y)$ memory and $O(n_t^3)$ work per mode.
+        At $n_t = 64$, $n_x = n_y = 128$: $64^2 \times 128^2 \times 8\,\text{bytes} \approx 3.4$\,GB
+        just for the system matrices.
+\end{itemize}
+
+Thomas achieves the best of both worlds: $O(n_t)$ work and $O(n_t)$ storage per mode
+(only 3 diagonals), with full GPU parallelism over all modes at every sweep step.
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{lllll}
+\toprule
+\textbf{Method} & \textbf{GPU parallel?} & \textbf{Work/mode} & \textbf{Storage/mode} \\
+\midrule
+Thomas           & Yes (across modes) & $O(n_t)$   & $O(n_t)$ (3 diagonals) \\
+Per-mode LU      & No (serial loop)   & $O(n_t)$   & $O(n_t)$ (banded)      \\
+\texttt{pagefun} LU & Yes (across modes) & $O(n_t^3)$ & $O(n_t^2)$ (dense)  \\
+\bottomrule
+\end{tabular}
+\end{center}
 
 \textbf{Memory.}
 $O(n_t \times n_x \times n_y)$ -- linear in the number of unknowns.
@@ -169,7 +207,8 @@ This is what the 1D solver uses.
 Requires iterating over all $n_x \times n_y$ modes in a MATLAB loop.
 At $128 \times 128 = 16{,}384$ modes, the loop overhead is prohibitive.
 More fundamentally, per-mode loops cannot run on a GPU (no vectorisation over modes).
-Memory cost $O(n_t^2 \times n_x n_y)$ also becomes catastrophic in 3D.
+Memory is $O(n_t \times n_x n_y)$ with banded storage, but the absence of vectorisation
+makes this the dominant cost regardless.
 
 \subsection{Option 3: \texttt{pagefun} with LU}
 
@@ -310,7 +349,7 @@ Memory cost is $O(n_t \times n_x \times n_y)$, identical to Thomas.
 \textbf{Method} & \textbf{Stable?} & \textbf{GPU?} & \textbf{Memory} & \textbf{Status} \\
 \midrule
 Thomas (TDMA)         & Only $\eps/\dt \leq 1$ & Yes & $O(n_t \cdot n_l)$    & Default ($\eps$ small) \\
-Per-mode LU           & Yes                    & No  & $O(n_t^2 \cdot n_l)$  & Used in 1D only \\
+Per-mode LU           & Yes                    & No  & $O(n_t \cdot n_l)$    & Used in 1D only \\
 \texttt{pagefun} LU   & Yes                    & Yes & $O(n_t^2 \cdot n_l)$  & Rejected (memory) \\
 PCR                   & Conditional            & Yes & $O(n_t \cdot n_l)$    & Future work \\
 Spike $p=2$           & Yes (all $\eps$)        & Yes & $O(n_t \cdot n_l)$    & Default ($\eps/\dt > 1$) \\
