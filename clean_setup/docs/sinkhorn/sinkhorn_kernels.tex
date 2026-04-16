@@ -1,0 +1,398 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{xcolor}
+
+\geometry{margin=1.1in}
+
+\newcommand{\eps}{\varepsilon}
+\newcommand{\dt}{\Delta t}
+\newcommand{\dx}{\Delta x}
+\newcommand{\RR}{\mathbb{R}}
+\newcommand{\EE}{\mathbb{E}}
+\newcommand{\Ht}{H_t}
+\newcommand{\HT}{H_T}
+
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+
+\title{Dynamic Sinkhorn for the Schr\"odinger Bridge:\\
+       Free-Space vs.\ Neumann Heat Kernels}
+\author{Optimal Transport / Schr\"odinger Bridge Project}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+The Sinkhorn algorithm for the dynamic Schr\"odinger bridge (SB) requires applying a heat
+semigroup at each iteration.
+The choice of heat kernel determines what reference stochastic process the SB is built
+against, and how the kernel is computed in practice.
+This note documents two implementations:
+(1) the Neumann kernel on $[0,1]$ (reflecting Brownian motion, computed via DCT), and
+(2) the free-space kernel on $\RR$ (standard Brownian motion, computed via FFT
+convolution).
+We describe the mathematics, the discrete implementations, the normalisation
+conventions, and when the two kernels agree or differ.
+\end{abstract}
+
+%------------------------------------------------------------------------------
+\section{The Schr\"odinger Bridge Problem}
+%------------------------------------------------------------------------------
+
+Given two probability densities $\rho_0, \rho_1$ on a domain $\Omega$
+(either $[0,1]$ or $\RR$) and diffusivity $\eps > 0$, the Schr\"odinger bridge
+problem asks for the probability path measure $P^*$ that minimises the KL
+divergence to the Wiener measure $W^\eps$ (Brownian motion with diffusivity $\eps$)
+subject to having marginals $\rho_0$ at $t=0$ and $\rho_1$ at $t=T$:
+\begin{equation}
+  P^* = \arg\min_{P:\, \rho_P(0)=\rho_0,\, \rho_P(T)=\rho_1} \mathrm{KL}(P \| W^\eps).
+\end{equation}
+
+The hydrodynamic (PDE) form of the same problem is:
+\begin{equation}
+  \min_{\rho, m} \;\iint_{\Omega} \frac{|m|^2}{2\rho} + \eps^2 \rho \log \rho \; dx\, dt
+  \quad \text{s.t.} \quad \partial_t \rho + \partial_x m = \eps \Delta\rho, \quad
+  \rho(0,\cdot)=\rho_0, \quad \rho(T,\cdot)=\rho_1.
+\end{equation}
+(The $\eps^2 \rho \log \rho$ term is the entropic regularisation; for $\eps \to 0$ this
+vanishes and we recover the Benamou--Brenier OT problem.)
+
+%------------------------------------------------------------------------------
+\section{Hopf--Cole Factorisation and the Schr\"odinger System}
+%------------------------------------------------------------------------------
+
+The optimal density factorises as
+\begin{equation}
+  \rho^*(t, x) = \varphi(t,x) \cdot \psi(t,x),
+\end{equation}
+where $\varphi$ satisfies the \textit{forward} heat equation and $\psi$ the
+\textit{backward} heat equation:
+\begin{equation}
+  \partial_t \varphi = \eps \Delta \varphi, \qquad
+  -\partial_t \psi  = \eps \Delta \psi.
+\end{equation}
+The pair $(\varphi, \psi)$ must satisfy the \textbf{Schr\"odinger system}:
+\begin{equation}
+  \varphi(0,x)\, \psi(0,x) = \rho_0(x), \qquad
+  \varphi(T,x)\, \psi(T,x) = \rho_1(x).
+\end{equation}
+
+\textbf{Momentum.}
+The optimal momentum density is recovered from the Hopf--Cole factors as
+\begin{equation}
+  m^*(t,x) = 2\eps\, \varphi(t,x)\, \partial_x \psi(t,x).
+\end{equation}
+In the code the spatial gradient is computed at staggered positions $x_{j+1/2}$:
+\begin{equation}
+  m^*(t, x_{j+\frac{1}{2}})
+  = 2\eps\, \frac{\varphi_j(t) + \varphi_{j+1}(t)}{2}
+             \cdot \frac{\psi_{j+1}(t) - \psi_j(t)}{\dx}.
+\end{equation}
+
+\textbf{Trajectory after convergence.}
+Given converged boundary values $\varphi(0,\cdot)$ and $\psi(T,\cdot)$, the full
+trajectory is recovered by propagating each forward/backward in time:
+\begin{equation}
+  \varphi(t,\cdot) = H_t[\varphi(0,\cdot)], \qquad
+  \psi(t,\cdot) = H_{T-t}[\psi(T,\cdot)],
+\end{equation}
+using the heat semigroup $H_t$ of the chosen kernel.
+
+%------------------------------------------------------------------------------
+\section{Sinkhorn Iterations}
+%------------------------------------------------------------------------------
+
+Let $H_T$ denote the heat semigroup at the full time $T$.
+Starting from $\psi^{(0)}(0,\cdot) = \mathbf{1}$, each Sinkhorn iteration is:
+\begin{align}
+  \varphi^{(n+1)}(0) &\leftarrow \rho_0 / \psi^{(n)}(0)       \label{eq:sink1} \\
+  \varphi^{(n+1)}(T) &= H_T[\varphi^{(n+1)}(0)]               \label{eq:sink2} \\
+  \psi^{(n+1)}(T)    &\leftarrow \rho_1 / \varphi^{(n+1)}(T)  \label{eq:sink3} \\
+  \psi^{(n+1)}(0)    &= H_T[\psi^{(n+1)}(T)]                  \label{eq:sink4}
+\end{align}
+where division is pointwise.
+Convergence is measured as the $L^2$ error on the left marginal:
+\begin{equation}
+  \text{err}^{(n)} = \|\varphi^{(n)}(0,\cdot)\, \psi^{(n)}(0,\cdot) - \rho_0\|_{L^2}.
+\end{equation}
+Convergence is guaranteed for any $\eps > 0$ and is linear with rate determined by the
+``Hilbert metric'' contraction of $H_T$.
+The rate worsens as $\eps \to 0$ (less regularisation), making Sinkhorn impractical for
+pure OT ($\eps = 0$).
+
+\subsection{One-Shot vs.\ Step-by-Step Propagation}
+
+There are two ways to apply $H_T$ numerically:
+\begin{itemize}
+  \item \textbf{One-shot}: apply $H_T$ directly as a single operation (one convolution
+        with $K_T$, or one DCT multiplication by $e^{-\eps\lambda_k T}$).
+  \item \textbf{Step-by-step}: compose $n_t$ applications of $H_{\dt}$ (smaller
+        convolutions or DCT multiplications).
+\end{itemize}
+
+For the Neumann kernel both are equivalent (both exact up to floating point), since the
+DCT diagonalises the semigroup for all $t$.
+
+For the free-space kernel on a bounded grid, only one-shot is correct.
+$\varphi(0)$ and $\psi(T)$ are narrow (they equal the marginal divided by a slowly
+varying function), so a single zero-padded convolution with $K_T$ is accurate.
+With step-by-step propagation, after $k$ steps the function has spread wide and is
+truncated by the grid boundary at each subsequent step; the error compounds over
+$n_t$ steps and can be $O(1)$ for large $\eps$.
+
+The current implementation uses one-shot propagation inside the Sinkhorn loop,
+and step-by-step propagation (with the smaller kernel $H_{T-t_k}$ applied once per
+output time) during trajectory recovery.
+
+%------------------------------------------------------------------------------
+\section{Kernel 1: Neumann on $[0,1]$ (DCT)}
+%------------------------------------------------------------------------------
+
+\subsection{Reference Process}
+
+The reference process is \textbf{reflected Brownian motion on $[0,1]$}: standard
+Brownian motion with diffusivity $\eps$ that reflects elastically at $x = 0$ and $x = 1$.
+The associated SB is the optimal coupling of $\rho_0$ and $\rho_1$ relative to this
+reflected process.
+
+\subsection{Heat Semigroup}
+
+The heat equation $\partial_t u = \eps \Delta u$ with homogeneous Neumann BCs
+($\partial_x u|_{x=0} = \partial_x u|_{x=1} = 0$) is diagonalised by the cosine functions:
+\begin{equation}
+  e_k(x) = \cos(k \pi x), \qquad k = 0, 1, 2, \ldots, n_x - 1.
+\end{equation}
+The eigenvalue of $-\Delta$ for mode $k$ is $\lambda_k = (k\pi)^2$ (continuous).
+The heat semigroup acts by
+\begin{equation}
+  \bigl(H_t \varphi\bigr)(x)
+  = \sum_{k=0}^{\infty} e^{-\eps \lambda_k t}\, \hat\varphi_k\, e_k(x),
+\end{equation}
+where $\hat\varphi_k = \langle \varphi, e_k \rangle$ are the cosine (DCT) coefficients.
+
+\subsection{Discrete Implementation}
+
+On an $n_x$-point cell-centre grid with $\dx = 1/n_x$, the DCT-II diagonalises the
+\textit{discrete} Neumann Laplacian.
+The discrete eigenvalues are
+\begin{equation}
+  \lambda_k^{\dx} = \frac{2 - 2\cos(k\pi\dx)}{\dx^2},
+  \qquad k = 0, 1, \ldots, n_x - 1.
+\end{equation}
+For small $k\dx$: $\lambda_k^{\dx} \approx (k\pi)^2 = \lambda_k$, so the discrete and
+continuous eigenvalues agree at low frequencies and diverge near the Nyquist mode
+$k = n_x - 1$.
+
+The semigroup application reduces to three operations:
+\begin{equation}
+  H_t[\varphi] = \mathrm{IDCT}\!\left(e^{-\eps\,\lambda^{\dx}\, t} \odot \mathrm{DCT}(\varphi)\right),
+\end{equation}
+where $\odot$ is elementwise multiplication.
+The decay vector $e^{-\eps\,\lambda^{\dx}\, T}$ (for the Sinkhorn loop) is precomputed once.
+For trajectory recovery at time $t$, the decay $e^{-\eps\,\lambda^{\dx}\,t}$ is recomputed
+from the eigenvalues, which are also precomputed.
+
+\subsection{Marginal Normalisation}
+
+For the Neumann kernel the marginals $\rho_0$, $\rho_1$ must be normalised as
+\textbf{discrete probability masses} summing to 1:
+\begin{equation}
+  \rho_0^{(i)} = \frac{f(x_i)}{\sum_j f(x_j)}, \qquad \sum_i \rho_0^{(i)} = 1.
+\end{equation}
+The Neumann SB on $[0,1]$ is a \textit{coupling} of these mass vectors.
+The steady state of $H_t$ as $t \to \infty$ is the uniform distribution (equal mass at
+each grid point), which is the correct equilibrium for reflected BM.
+
+\subsection{When to Use}
+
+\begin{itemize}
+  \item Marginals are well-concentrated in the interior of $[0,1]$
+        (i.e.\ $\sigma \ll \min(\mu, 1-\mu)$), so the Neumann and free-space kernels
+        agree to high accuracy.
+  \item The problem is naturally set on a bounded domain with no-flux boundaries.
+  \item Numerical efficiency: DCT is $O(n_x \log n_x)$, no padding overhead.
+\end{itemize}
+
+%------------------------------------------------------------------------------
+\section{Kernel 2: Free Space on $\RR$ (Gaussian Convolution)}
+%------------------------------------------------------------------------------
+
+\subsection{Reference Process}
+
+The reference process is \textbf{standard Brownian motion on $\RR$} with diffusivity
+$\eps$.
+The associated SB is the optimal coupling of $\rho_0$ and $\rho_1$ on all of $\RR$,
+without boundary effects.
+This is the mathematically natural setting for the Gaussian SB test case, where the
+analytical solution is known explicitly.
+
+\subsection{Heat Semigroup}
+
+The heat kernel on $\RR$ is the Gaussian:
+\begin{equation}
+  K_t(x, y) = \frac{1}{\sqrt{4\pi\eps t}} \exp\!\left(-\frac{(x-y)^2}{4\eps t}\right).
+\end{equation}
+The semigroup acts by convolution:
+\begin{equation}
+  (H_t \varphi)(x) = \int_\RR K_t(x-y)\, \varphi(y)\, dy
+                   = (K_t * \varphi)(x).
+\end{equation}
+Note that $K_t$ is a Gaussian with variance $\sigma^2 = 2\eps t$:
+$K_t \sim \mathcal{N}(0, 2\eps t)$.
+
+\subsection{Discrete Implementation}
+
+On a finite grid $\{x_i\}_{i=1}^{n_x} \subset [0,1]$ the convolution is approximated by
+zero-padded FFT convolution.
+The zero-padding is essential to avoid wrap-around aliasing from the cyclic FFT.
+The padding width is chosen so that the Gaussian tail is negligible at the boundary:
+\begin{equation}
+  n_{\mathrm{pad}} = \left\lceil \frac{6\sqrt{2\eps T}}{\dx} \right\rceil
+  \qquad (\text{6 standard deviations}).
+\end{equation}
+The padded length is rounded up to the next power of 2 for FFT efficiency:
+$n_{\mathrm{fft}} = 2^{\lceil \log_2(n_x + 2 n_{\mathrm{pad}}) \rceil}$.
+
+The Gaussian kernel is discretised on the padded grid, normalised so that
+$\sum_j K(j\dx) = 1$ (discrete probability), and FFT'd once per precomputation:
+\begin{equation}
+  H_T[\varphi] = \mathrm{Re}\!\left(
+    \mathcal{F}^{-1}\!\left[\mathcal{F}[\varphi_{\mathrm{pad}}] \odot \hat K_T\right]
+  \right)\!\big|_{[1:n_x]}.
+\end{equation}
+The output is cropped back to the original $n_x$ grid after convolution.
+
+For trajectory recovery, the kernel is recomputed at each time $t$ (not precomputed).
+
+\subsection{Marginal Normalisation}
+
+For the free-space kernel the marginals $\rho_0$, $\rho_1$ must be supplied as
+\textbf{PDF values} (not normalised to sum to 1):
+\begin{equation}
+  \rho_0^{(i)} = f(x_i), \qquad \sum_i \rho_0^{(i)}\,\dx \approx 1.
+\end{equation}
+This is because the free-space SB is a coupling of continuous distributions on $\RR$,
+not of discrete masses on $[0,1]$.
+The steady state of $K_t$ as $t \to \infty$ is the zero function (mass escapes to
+$\pm\infty$), not a uniform distribution.
+
+In the code, the flag \texttt{cfg.use\_pdf\_marginals = true} selects this convention;
+the default (\texttt{false}) uses the mass-normalised convention for the Neumann kernel.
+
+\subsection{When to Use}
+
+\begin{itemize}
+  \item Marginals are defined on $\RR$ (e.g.\ Gaussians), and the analytical SB
+        solution is known for comparison.
+  \item Marginals extend to or are concentrated near the boundary of $[0,1]$, making
+        the Neumann reflecting BCs physically incorrect.
+  \item Validation: the free-space SB for Gaussian marginals has a closed-form solution
+        (linear interpolation of means and standard deviations), enabling exact error measurement.
+\end{itemize}
+
+%------------------------------------------------------------------------------
+\section{Comparison}
+%------------------------------------------------------------------------------
+
+\begin{center}
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{lll}
+\toprule
+                        & \textbf{Neumann (DCT)}     & \textbf{Free Space (FFT)} \\
+\midrule
+Reference process       & Reflected BM on $[0,1]$    & Standard BM on $\RR$      \\
+Spatial domain          & $[0,1]$                    & $\RR$ (truncated to $[0,1]$) \\
+BCs at walls            & Reflecting (zero flux)     & None (absorbing / escaping) \\
+Kernel formula          & $e^{-\eps\lambda_k t}$ in DCT basis & Gaussian $K_t(x) = \mathcal{N}(0, 2\eps t)$ \\
+Implementation          & DCT + pointwise multiply   & Zero-padded FFT convolution \\
+Precomputation          & Decay vector $e^{-\eps\lambda^{\dx} T}$ & Kernel FFT $\hat K_T$ \\
+Cost per Sinkhorn iter  & $O(n_x \log n_x)$          & $O(n_{\mathrm{fft}} \log n_{\mathrm{fft}})$, $n_{\mathrm{fft}} \gg n_x$ \\
+Marginal normalisation  & Mass (sum = 1)             & PDF (sum$\cdot\dx \approx 1$) \\
+Steady state of $H_t$   & Uniform mass               & Zero (mass escapes) \\
+Analytical test case    & No (known only for $\eps \to 0$) & Yes (Gaussian SB) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{When Do the Two Kernels Agree?}
+
+The Neumann kernel on $[0,1]$ and the free-space kernel on $\RR$ agree when the
+marginals are concentrated far from the boundary.
+More precisely, by the \textbf{method of images}, the Neumann heat kernel is the
+free-space heat kernel plus image charges reflected at $x = 0$ and $x = 1$:
+\begin{equation}
+  K_t^{\mathrm{Neumann}}(x, y)
+  = \sum_{n=-\infty}^{\infty}
+    \bigl[ K_t(x, y + 2n) + K_t(x, -y + 2n) \bigr].
+\end{equation}
+The correction terms decay like $e^{-1/(2\eps t)}$ when $y$ is bounded away from 0 and 1.
+For a Gaussian marginal $\mathcal{N}(\mu, \sigma^2)$ with $\sigma \ll \min(\mu, 1-\mu)$,
+the image charges contribute exponentially small corrections, and the two kernels are
+numerically indistinguishable.
+This is the regime of our Gaussian test cases (e.g.\ $\mu = 1/3$ or $2/3$, $\sigma = 0.05$).
+
+\subsection{When Do They Differ?}
+
+They differ when:
+\begin{itemize}
+  \item Marginals have significant mass near the boundary (large $\sigma$, $\mu$ near 0 or 1).
+  \item $\eps$ is large enough that the heat kernel has spread to the walls
+        over time $T$: roughly $\sqrt{2\eps T} \gtrsim \min(\mu, 1-\mu)$.
+  \item The problem is genuinely set on $[0,1]$ with physical no-flux walls
+        (Neumann is correct), or genuinely on $\RR$ (free-space is correct).
+\end{itemize}
+
+%------------------------------------------------------------------------------
+\section{Implementation Files}
+%------------------------------------------------------------------------------
+
+\begin{itemize}
+  \item \texttt{shared/1d/pipelines/sinkhorn\_hopf\_cole.m} ---
+        main Sinkhorn loop, kernel-agnostic via \texttt{cfg.precomp\_heat}.
+  \item \texttt{shared/1d/utils/precomp\_heat\_neumann.m} ---
+        builds the Neumann (DCT) kernel handle.
+  \item \texttt{shared/1d/utils/precomp\_heat\_free\_space.m} ---
+        builds the free-space (Gaussian FFT) kernel handle.
+  \item \texttt{discretize\_first/1d/experiments/test\_sb\_gaussian\_sinkhorn.m} ---
+        comparison of ADMM and Sinkhorn (both kernels) on the Gaussian SB test case.
+\end{itemize}
+
+To switch kernels, change \texttt{cfg.precomp\_heat}:
+\begin{verbatim}
+  cfg.precomp_heat = @precomp_heat_neumann;      % reflecting BM on [0,1]
+  cfg.precomp_heat = @precomp_heat_free_space;   % BM on R
+\end{verbatim}
+For the free-space kernel also set \texttt{cfg.use\_pdf\_marginals = true} and
+use \texttt{problem.rho0\_pdf}/\texttt{rho1\_pdf} rather than the mass-normalised
+\texttt{rho0}/\texttt{rho1}.
+
+%------------------------------------------------------------------------------
+\section{Current Challenges}
+%------------------------------------------------------------------------------
+
+\begin{itemize}
+  \item \textbf{Trajectory recovery cost.}
+        The free-space trajectory recovery recomputes a new Gaussian kernel for each of
+        the $n_t + 1$ output times.
+        For large $n_t$ this is non-trivial; the kernels could be precomputed once (as
+        is already done for the Neumann kernel).
+
+  \item \textbf{Step-by-step Neumann for intermediate times.}
+        During trajectory recovery with the Neumann kernel, the code calls
+        \texttt{heat.apply\_time($\varphi_0$, $t_k$)} which recomputes
+        $e^{-\eps\lambda^{\dx} t_k}$ at each output time.
+        For large $n_t$ this could be replaced by stepping forward one $\dt$ at a time
+        using the precomputed \texttt{decay\_dt}, which only requires one multiply per step.
+
+  \item \textbf{Extension to 2D.}
+        The Neumann kernel extends naturally to 2D via a 2D DCT (diagonalising the 2D
+        Neumann Laplacian with eigenvalues $\lambda_{kx} + \lambda_{ky}$).
+        The free-space kernel extends via 2D Gaussian convolution with a 2D FFT.
+        Neither is yet implemented; the current 2D solver uses ADMM only.
+\end{itemize}
+
+\end{document}
