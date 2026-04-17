@@ -57,6 +57,20 @@ MAT_FILE = fullfile(res_dir, mats(idx).name);
 
 fprintf('Loading %s ...\n', MAT_FILE);
 load(MAT_FILE, 'result', 'cfg', 'problem', 'rho_ana_cc', 'obj', 'ftag');
+% Load Sinkhorn result if present in the file (may be absent for old .mat files)
+rho_sink_cc = [];
+sink_result  = [];
+try
+    tmp = load(MAT_FILE, 'rho_sink_cc', 'sink_result');
+    if isfield(tmp, 'rho_sink_cc') && ~isempty(tmp.rho_sink_cc)
+        rho_sink_cc = tmp.rho_sink_cc;
+        sink_result  = tmp.sink_result;
+        fprintf('  Sinkhorn-Neumann result loaded (iters=%d, converged=%d, error=%.2e).\n', ...
+            sink_result.iters, sink_result.converged, sink_result.error);
+    end
+catch
+end
+has_sink = ~isempty(rho_sink_cc);
 
 nt = problem.nt;  dt = problem.dt;
 nx = problem.nx;  dx = problem.dx;
@@ -263,6 +277,99 @@ xlabel('t'); ylabel('\int\int \rho\, dx\, dy');
 title(sprintf('Mass conservation   drift = %.2e', max(mass) - min(mass)));
 grid on;
 savefig(fig7, 'mass_conservation');
+
+% -------------------------------------------------------------------------
+%% Figures 8–10: Sinkhorn-Neumann comparison (only when available)
+% -------------------------------------------------------------------------
+if has_sink
+    t_cc = ((1:nt)' - 0.5) * dt;   % ensure defined (in case fig6/7 were skipped)
+
+    % ------------------------------------------------------------------
+    % Figure 8: density heatmaps — LADMM vs Sinkhorn-Neumann
+    % ------------------------------------------------------------------
+    clim_max_sink = max(max(rho_sink_cc(:)), max(rho_num_cc(:)));
+
+    fig8 = figure('Name', 'LADMM vs Sinkhorn', 'Position', [50 50 1200 500]);
+    for p = 1:n_snap
+        k = k_snap(p);
+
+        subplot(2, n_snap, p);
+        imagesc(xx, yy, squeeze(rho_sink_cc(k,:,:))');
+        axis xy; colorbar; clim([0 clim_max_sink]);
+        title(sprintf('Sinkhorn  t=%.2f', (k-0.5)*dt));
+        xlabel('x'); ylabel('y');
+
+        subplot(2, n_snap, n_snap + p);
+        imagesc(xx, yy, squeeze(rho_num_cc(k,:,:))');
+        axis xy; colorbar; clim([0 clim_max_sink]);
+        title(sprintf('LADMM  t=%.2f', (k-0.5)*dt));
+        xlabel('x'); ylabel('y');
+    end
+    sgtitle(sprintf('Density: LADMM vs Sinkhorn-Neumann   eps=%.4g', cfg.vareps));
+    savefig(fig8, 'density_vs_sinkhorn');
+
+    % ------------------------------------------------------------------
+    % Figure 9: x-slice at y=0.5 — LADMM vs Sinkhorn-Neumann
+    % ------------------------------------------------------------------
+    [~, iy] = min(abs(yy - 0.5));
+
+    fig9 = figure('Name', 'x-slice vs Sinkhorn', 'Position', [50 600 700 400]);
+    hold on;
+    leg9 = gobjects(n_snap, 2);
+    for p = 1:n_snap
+        k = k_snap(p);
+        leg9(p,1) = plot(xx, rho_sink_cc(k,:,iy), '-',  'Color', colors(p,:), 'LineWidth', 1.5);
+        leg9(p,2) = plot(xx, rho_num_cc(k,:,iy),  'o--','Color', colors(p,:), 'MarkerSize', 4);
+    end
+    leg9_str = cell(n_snap, 2);
+    for p = 1:n_snap
+        k = k_snap(p);
+        leg9_str{p,1} = sprintf('Sinkhorn t=%.2f', (k-0.5)*dt);
+        leg9_str{p,2} = sprintf('LADMM    t=%.2f', (k-0.5)*dt);
+    end
+    legend(leg9(:), leg9_str(:), 'Location', 'best', 'FontSize', 7);
+    xlabel('x'); ylabel('\rho(t,x,y=0.5)');
+    title(sprintf('x-slice at y=0.5: LADMM vs Sinkhorn-Neumann   eps=%.4g', cfg.vareps));
+    grid on;
+    savefig(fig9, 'xslice_vs_sinkhorn');
+
+    % ------------------------------------------------------------------
+    % Figure 10: L2 error LADMM vs Sinkhorn-Neumann over time
+    %            + diagonal slice (if square grid)
+    % ------------------------------------------------------------------
+    l2_sink = sqrt(dx * dy * sum(sum((rho_num_cc - rho_sink_cc).^2, 2), 3));
+
+    fig10 = figure('Name', 'L2 error vs Sinkhorn', 'Position', [700 550 600 300]);
+    plot(t_cc, l2_sink, 'r-', 'LineWidth', 1.5);
+    if ~isempty(rho_ana_cc)
+        hold on;
+        l2_ana = sqrt(dx * dy * sum(sum((rho_num_cc - rho_ana_cc).^2, 2), 3));
+        plot(t_cc, l2_ana, 'b--', 'LineWidth', 1.5);
+        legend('vs Sinkhorn-Neumann', 'vs Analytical', 'Location', 'best');
+    end
+    xlabel('t'); ylabel('||\rho_{LADMM} - \rho_{ref}||_{L^2(x,y)}');
+    title(sprintf('L^2 error vs reference   eps=%.4g   mean(vs sink)=%.2e', ...
+        cfg.vareps, mean(l2_sink)));
+    grid on;
+    savefig(fig10, 'l2error_vs_sinkhorn');
+
+    % ------------------------------------------------------------------
+    % Figure 11: mass comparison LADMM vs Sinkhorn over time
+    % ------------------------------------------------------------------
+    mass_sink = squeeze(sum(sum(rho_sink_cc, 2), 3)) * dx * dy;
+
+    fig11 = figure('Name', 'Mass vs Sinkhorn', 'Position', [700 100 600 300]);
+    hold on;
+    plot(t_cc, mass,      'b-',  'LineWidth', 1.5, 'DisplayName', 'LADMM');
+    plot(t_cc, mass_sink, 'r--', 'LineWidth', 1.5, 'DisplayName', 'Sinkhorn-Neumann');
+    xlabel('t'); ylabel('\int\int \rho\, dx\, dy');
+    title(sprintf('Mass conservation comparison   eps=%.4g', cfg.vareps));
+    legend('Location', 'best');
+    grid on;
+    savefig(fig11, 'mass_vs_sinkhorn');
+
+    fprintf('Sinkhorn comparison figures saved (8–11).\n');
+end
 
 % -------------------------------------------------------------------------
 fprintf('\nFigures saved to %s\n', fig_dir);
