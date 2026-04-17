@@ -52,7 +52,8 @@ function result = discretize_then_optimize(cfg, problem)
     ops  = problem.ops;
 
     % Precompute banded FP projection factors
-    if isequal(cfg.projection, @proj_fokker_planck_banded)
+    if isequal(cfg.projection, @proj_fokker_planck_banded) || ...
+       isequal(cfg.projection, @proj_fokker_planck_backslash)
         problem.banded_proj = precomp_banded_proj(problem, cfg.vareps);
     elseif isequal(cfg.projection, @proj_fokker_planck_spike2)
         problem.banded_proj = precomp_banded_proj_spike2(problem, cfg.vareps);

@@ -143,15 +143,15 @@ end
 
 function f_hat = dct2_xy(f, nt, nx, ny)
 % DCT-II along dim 2 (x) and dim 3 (y) of a (nt x nx x ny) array.
-% Uses a single accumulator variable so only one large temporary is live
-% at a time, reducing GPU memory fragmentation across repeated calls.
+% Uses a single accumulator and 3 permutes (minimum needed for 2D DCT).
+% The two consecutive permutes after the x-DCT are merged into one:
+%   permute([2,1,3]) then permute([3,1,2]) == permute([3,2,1]).
     f_hat = permute(f, [2, 1, 3]);       % (nx x nt x ny)
-    f_hat = reshape(f_hat, nx, nt*ny);   % (nx x nt*ny)
+    f_hat = reshape(f_hat, nx, nt*ny);
     f_hat = dct(f_hat);
     f_hat = reshape(f_hat, nx, nt, ny);  % (nx x nt x ny)
-    f_hat = permute(f_hat, [2, 1, 3]);   % (nt x nx x ny)
-    f_hat = permute(f_hat, [3, 1, 2]);   % (ny x nt x nx)
-    f_hat = reshape(f_hat, ny, nt*nx);   % (ny x nt*nx)
+    f_hat = permute(f_hat, [3, 2, 1]);   % (ny x nt x nx)  [merged permute]
+    f_hat = reshape(f_hat, ny, nt*nx);
     f_hat = dct(f_hat);
     f_hat = reshape(f_hat, ny, nt, nx);  % (ny x nt x nx)
     f_hat = permute(f_hat, [2, 3, 1]);   % (nt x nx x ny)
@@ -159,12 +159,13 @@ end
 
 function f = idct2_xy(f_hat, nt, nx, ny)
 % IDCT-II along dim 2 (x) and dim 3 (y) of a (nt x nx x ny) array.
+% The two consecutive permutes after the y-IDCT are merged into one:
+%   permute([2,3,1]) then permute([2,1,3]) == permute([3,2,1]).
     f = permute(f_hat, [3, 1, 2]);   % (ny x nt x nx)
     f = reshape(f, ny, nt*nx);
     f = idct(f);
     f = reshape(f, ny, nt, nx);      % (ny x nt x nx)
-    f = permute(f, [2, 3, 1]);       % (nt x nx x ny)
-    f = permute(f, [2, 1, 3]);       % (nx x nt x ny)
+    f = permute(f, [3, 2, 1]);       % (nx x nt x ny)  [merged permute]
     f = reshape(f, nx, nt*ny);
     f = idct(f);
     f = reshape(f, nx, nt, ny);      % (nx x nt x ny)

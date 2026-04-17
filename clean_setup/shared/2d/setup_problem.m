@@ -31,6 +31,8 @@ function problem = setup_problem(cfg, prob_def)
     % Boundary densities from problem definition
     rho0 = prob_def.rho0_func(problem.xx, problem.yy);
     rho1 = prob_def.rho1_func(problem.xx, problem.yy);
+    problem.rho0_pdf = rho0;   % raw PDF from prob_def (no normalisation)
+    problem.rho1_pdf = rho1;
     problem.rho0 = rho0 / (sum(rho0(:))*problem.dx*problem.dy);
     problem.rho1 = rho1 / (sum(rho1(:))*problem.dx*problem.dy);
 
