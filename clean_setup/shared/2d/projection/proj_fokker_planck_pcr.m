@@ -95,66 +95,80 @@ end
 % ---------------------------------------------------------------------------
 
 function phi_hat = pcr_solve(bp, f_hat, nt, nx, ny)
-% PCR_SOLVE  Parallel Cyclic Reduction for all (kx,ky) modes simultaneously.
+% PCR_SOLVE  Parallel Cyclic Reduction — persistent ping-pong buffers.
 %
 %   log2(nt) sequential passes, each a full (nt x nx x ny) parallel operation.
 %   At each level s (stride = 2^(s-1)):
 %     lo = 1:nt-stride,  hi = stride+1:nt
 %
-%     alpha(hi) = a(hi) / b(lo)          (positive: subtract below)
-%     gam(lo)   = c(lo) / b(hi)          (positive: subtract below)
+%     alpha(hi) = a(hi) / b(lo)
+%     gam(lo)   = c(lo) / b(hi)
+%     a_nxt(hi) = -alpha .* a(lo)
+%     c_nxt(lo) = -gam   .* c(hi)
+%     b_nxt = b;  b_nxt(hi) -= alpha.*c(lo);  b_nxt(lo) -= gam.*a(hi)
+%     d_nxt = d;  d_nxt(hi) -= alpha.*d(lo);  d_nxt(lo) -= gam.*d(hi)
+%       (d_nxt reads from d, so overlap rows accumulate both terms. ✓)
 %
-%     a_new(hi) = -alpha .* a(lo)
-%     c_new(lo) = -gam   .* c(hi)
-%     b_new(hi) -= alpha .* c(lo)        (b_new starts as copy of b)
-%     b_new(lo) -= gam   .* a(hi)
-%     d_new(hi) -= alpha .* d(lo)        (d_new starts as copy of d)
-%     d_new(lo) -= gam   .* d(hi)        (reads original d, not d_new)
-%
-%   Note on overlap rows (stride+1:nt-stride): b_new and d_new receive
-%   contributions from both the hi and lo updates — this is correct because
-%   the lo-update reads from b (original) and d (original) respectively.
+%   Memory strategy: 8 persistent gpuArray buffers (a/b/c/d × cur/nxt).
+%   Sole-reference writes avoid copy-on-write → zero heap allocations
+%   per level beyond the small alpha/gam temporaries of size (nt-stride)×nx×ny.
+%   After log2(nt) levels: phi_hat = d_cur ./ b_cur  (one output allocation).
 
-    a = bp.a_all;     % (nt x nx x ny), a(1,:,:) = 0
-    b = bp.main_all;  % (nt x nx x ny)
-    c = bp.c_all;     % (nt x nx x ny), c(nt,:,:) = 0
-    d = f_hat;        % (nt x nx x ny)
+    persistent a_cur b_cur c_cur d_cur a_nxt b_nxt c_nxt d_nxt is_init
+
+    % Allocate / reallocate buffers if first call or grid size changed
+    if isempty(is_init) || ~isequal(size(a_cur), [nt, nx, ny])
+        a_cur  = bp.a_all;
+        b_cur  = bp.main_all;
+        c_cur  = bp.c_all;
+        d_cur  = zeros(nt, nx, ny, 'like', f_hat);
+        a_nxt  = zeros(nt, nx, ny, 'like', f_hat);
+        b_nxt  = zeros(nt, nx, ny, 'like', f_hat);
+        c_nxt  = zeros(nt, nx, ny, 'like', f_hat);
+        d_nxt  = zeros(nt, nx, ny, 'like', f_hat);
+        is_init = true;
+    end
+
+    % In-place initialisation — sole reference → no copy on GPU
+    a_cur(:) = bp.a_all(:);
+    b_cur(:) = bp.main_all(:);
+    c_cur(:) = bp.c_all(:);
+    d_cur(:) = f_hat(:);
 
     for s = 1:bp.n_levels
         stride = 2^(s-1);
         lo = 1:nt-stride;    % rows with an upper neighbour
         hi = stride+1:nt;    % rows with a lower neighbour
 
-        % Elimination multipliers
-        alpha = a(hi,:,:) ./ b(lo,:,:);   % (nt-stride x nx x ny)
-        gam   = c(lo,:,:) ./ b(hi,:,:);   % (nt-stride x nx x ny)
+        % Elimination multipliers (small temporaries: (nt-stride) x nx x ny)
+        alpha = a_cur(hi,:,:) ./ b_cur(lo,:,:);
+        gam   = c_cur(lo,:,:) ./ b_cur(hi,:,:);
 
-        % New off-diagonals (zeros elsewhere, from initialisation)
-        a_new = zeros(nt, nx, ny, 'like', d);
-        a_new(hi,:,:) = -alpha .* a(lo,:,:);
+        % Write into _nxt buffers in-place (sole reference, no copy)
+        a_nxt(:)      = 0;
+        a_nxt(hi,:,:) = -alpha .* a_cur(lo,:,:);
 
-        c_new = zeros(nt, nx, ny, 'like', d);
-        c_new(lo,:,:) = -gam .* c(hi,:,:);
+        c_nxt(:)      = 0;
+        c_nxt(lo,:,:) = -gam .* c_cur(hi,:,:);
 
-        % New main diagonal: b_new = b, then add both contributions.
-        % Overlap rows (hi ∩ lo = stride+1:nt-stride) get both updates;
-        % the second indexed assignment reads b_new which already has the
-        % first update — giving b_i + alpha_i*c_{i-s} + gamma_i*a_{i+s}. ✓
-        b_new = b;
-        b_new(hi,:,:) = b_new(hi,:,:) - alpha .* c(lo,:,:);
-        b_new(lo,:,:) = b_new(lo,:,:) - gam   .* a(hi,:,:);
+        b_nxt(:)      = b_cur(:);
+        b_nxt(hi,:,:) = b_nxt(hi,:,:) - alpha .* c_cur(lo,:,:);
+        b_nxt(lo,:,:) = b_nxt(lo,:,:) - gam   .* a_cur(hi,:,:);
 
-        % New RHS: d_new = d, subtract contributions.
-        % IMPORTANT: both subtractions read from d (original), not d_new,
+        % IMPORTANT: both subtractions read from d_cur (original),
         % so overlap rows correctly accumulate both alpha and gamma terms. ✓
-        d_new = d;
-        d_new(hi,:,:) = d_new(hi,:,:) - alpha .* d(lo,:,:);
-        d_new(lo,:,:) = d_new(lo,:,:) - gam   .* d(hi,:,:);
+        d_nxt(:)      = d_cur(:);
+        d_nxt(hi,:,:) = d_nxt(hi,:,:) - alpha .* d_cur(lo,:,:);
+        d_nxt(lo,:,:) = d_nxt(lo,:,:) - gam   .* d_cur(hi,:,:);
 
-        a = a_new;  b = b_new;  c = c_new;  d = d_new;
+        % Pointer swap — clear tmp immediately to keep ref count = 1
+        tmp = a_cur; a_cur = a_nxt; a_nxt = tmp; tmp = []; %#ok<NASGU>
+        tmp = b_cur; b_cur = b_nxt; b_nxt = tmp; tmp = []; %#ok<NASGU>
+        tmp = c_cur; c_cur = c_nxt; c_nxt = tmp; tmp = []; %#ok<NASGU>
+        tmp = d_cur; d_cur = d_nxt; d_nxt = tmp; tmp = []; %#ok<NASGU>
     end
 
-    phi_hat = d ./ b;
+    phi_hat = d_cur ./ b_cur;
 end
 
 % ---------------------------------------------------------------------------
