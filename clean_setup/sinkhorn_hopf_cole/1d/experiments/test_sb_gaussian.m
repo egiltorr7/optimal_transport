@@ -14,7 +14,8 @@
 %   adding the required folders to the MATLAB path.
 
 clear; close all;
-run(fullfile(fileparts(mfilename('fullpath')), '..', 'setup_paths.m'));
+setup_paths_base = fullfile(fileparts(mfilename('fullpath')), '..');  %#ok<NASGU>
+run(fullfile(setup_paths_base, 'setup_paths.m'));
 
 % Output directory for figures
 fig_dir = fullfile(fileparts(mfilename('fullpath')), '..', 'results', 'figures');

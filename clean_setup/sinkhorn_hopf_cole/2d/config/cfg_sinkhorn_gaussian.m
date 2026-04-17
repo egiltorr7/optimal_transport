@@ -12,12 +12,12 @@ function cfg = cfg_sinkhorn_gaussian()
     % cfg.use_pdf_marginals = true;   % use raw PDF marginals (for free-space / R^2 reference)
 
     % Grid
-    cfg.nt = 32;
-    cfg.nx = 64;
-    cfg.ny = 64;
+    cfg.nt = 64;
+    cfg.nx = 128;
+    cfg.ny = 128;
 
     % Sinkhorn parameters
-    cfg.vareps   = 0.05;   % Schrodinger bridge regularisation epsilon
+    cfg.vareps   = 0.1;   % Schrodinger bridge regularisation epsilon
     cfg.max_iter = 500;
     cfg.tol      = 1e-8;
 

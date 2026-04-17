@@ -5,12 +5,16 @@
 %     Figure 1: density snapshots at several times (Sinkhorn vs analytical)
 %     Figure 2: Sinkhorn convergence history
 %     Figure 3: L2 error in rho vs analytical over time
+%     Figure 4: diagonal cross-section rho(t, s, s) along x=y (requires nx==ny)
 %
 %   Run setup_paths first, or call from the repo root after adding
 %   the required folders to the MATLAB path.
 
 clear; close all;
-run(fullfile(fileparts(mfilename('fullpath')), '..', 'setup_paths.m'));
+% Pass the 2d/ directory to setup_paths so it can locate shared/ correctly
+% even when mfilename('fullpath') is unreliable inside run().
+setup_paths_base = fullfile(fileparts(mfilename('fullpath')), '..');  %#ok<NASGU>
+run(fullfile(setup_paths_base, 'setup_paths.m'));
 
 % Output directory for figures
 fig_dir = fullfile(fileparts(mfilename('fullpath')), '..', 'results', 'figures');
@@ -124,3 +128,46 @@ ylabel('||rho_num - rho_ana||_{L^2(x,y)}');
 title(sprintf('L^2 error vs Analytical   eps=%.4g,  kernel: %s', cfg.vareps, heat_name_tex));
 grid on;
 saveas(fig3, fullfile(fig_dir, sprintf('l2error_%s.png', ftag)));
+
+%% --- Figure 4: diagonal cross-section rho(t, x, x) ---
+% Along the line x=y the problem is symmetric, so the Gaussian peak travels
+% through this line.  This gives a clean 1D view for quantitative comparison.
+% Requires nx == ny (same cell-center grid in both directions).
+if nx == ny
+    t_fracs_diag = [0.1, 0.25, 0.5, 0.75, 0.9];
+    n_td   = numel(t_fracs_diag);
+    colors = parula(n_td);
+    s_diag = xx(:);   % s = x = y along the diagonal, (nx x 1)
+
+    fig4 = figure('Name', sprintf('SB Gaussian diagonal  eps=%.4g  kernel=%s', ...
+        cfg.vareps, result.heat_name), 'Position', [50 600 700 380]);
+    hold on;
+
+    leg_str = cell(2*n_td, 1);
+    for p = 1:n_td
+        k     = max(1, round(t_fracs_diag(p) * nt));
+        t_k   = k * dt;
+        k_ana = min(k, ntm);
+
+        % Diagonal slice: main diagonal of (nx x ny) density matrix
+        rho_num_diag = diag(squeeze(result.rho(k+1, :, :))) / (dx * dy);   % PDF
+        rho_ana_diag = diag(squeeze(rho_ana(k_ana, :, :)));                  % PDF
+
+        stride = max(1, floor(nx / 60));
+        idx    = 1:stride:nx;
+
+        plot(s_diag,      rho_ana_diag,      '-',  'Color', colors(p,:), 'LineWidth', 1.5);
+        plot(s_diag(idx), rho_num_diag(idx), 'o',  'Color', colors(p,:), ...
+            'MarkerSize', 4, 'MarkerFaceColor', colors(p,:));
+
+        leg_str{2*p-1} = sprintf('Analytical  t=%.2f', t_k);
+        leg_str{2*p}   = sprintf('Sinkhorn    t=%.2f', t_k);
+    end
+
+    legend(leg_str, 'Location', 'best', 'FontSize', 7);
+    xlabel('s  (x = y = s)');
+    ylabel('rho(t, s, s)');
+    title(sprintf('Diagonal slice x=y   eps=%.4g,  kernel: %s', cfg.vareps, heat_name_tex));
+    grid on;
+    saveas(fig4, fullfile(fig_dir, sprintf('diagonal_%s.png', ftag)));
+end

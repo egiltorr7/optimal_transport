@@ -78,10 +78,11 @@ run_sink = ~isfield(cfg, 'run_sinkhorn_comparison') || cfg.run_sinkhorn_comparis
 if run_sink && cfg.vareps > 0
     fprintf('Running Sinkhorn-Neumann (nt=%d, nx=%d, ny=%d, eps=%.4g)...\n', ...
         cfg.nt, cfg.nx, cfg.ny, cfg.vareps);
-    cfg_sink.vareps       = cfg.vareps;
-    cfg_sink.max_iter     = 2000;
-    cfg_sink.tol          = 1e-10;
-    cfg_sink.precomp_heat = @precomp_heat_neumann_2d;
+    cfg_sink.vareps            = cfg.vareps;
+    cfg_sink.max_iter          = 2000;
+    cfg_sink.tol               = 1e-10;
+    cfg_sink.precomp_heat      = @precomp_heat_neumann_2d;
+    cfg_sink.use_pdf_marginals = true;   % keep density in PDF units (matches rho_cc scale)
     t_sink = tic;
     sink_result = sinkhorn_hopf_cole(problem, cfg_sink);
     fprintf('  Sinkhorn: iters=%d  converged=%d  error=%.2e  wall=%.1fs\n', ...

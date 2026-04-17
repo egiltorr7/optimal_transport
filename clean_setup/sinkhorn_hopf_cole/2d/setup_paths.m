@@ -2,7 +2,12 @@
 %
 %   Run this once at the start of any session working in sinkhorn_hopf_cole/2d/.
 
-base    = fileparts(mfilename('fullpath'));
+% mfilename('fullpath') is unreliable when called via run() — use a caller-
+% supplied base if one is available, otherwise fall back to mfilename.
+if ~exist('setup_paths_base', 'var')
+    setup_paths_base = fileparts(mfilename('fullpath'));
+end
+base    = setup_paths_base;
 sh_base = fullfile(base, '..', '..', 'shared');
 sh2d    = fullfile(sh_base, '2d');
 
