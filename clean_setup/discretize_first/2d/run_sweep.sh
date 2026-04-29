@@ -87,10 +87,7 @@ MEOF
 
     # Run MATLAB, capturing output and timing at the bash level
     T_START=$(date +%s)
-    MATLAB_OUT=$("${MATLAB_BIN}" -nodisplay -nosplash -batch "
-        cd('${EXP_DIR}');
-        test_sb_gaussian;
-    " 2>&1) && STATUS="OK" || STATUS="FAILED"
+    MATLAB_OUT=$("${MATLAB_BIN}" -nodisplay -nosplash -batch "cd('${EXP_DIR}'); test_sb_gaussian;" 2>&1) && STATUS="OK" || STATUS="FAILED"
     T_END=$(date +%s)
     BASH_WALL=$((T_END - T_START))
 
