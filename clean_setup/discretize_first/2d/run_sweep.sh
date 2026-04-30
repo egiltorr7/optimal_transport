@@ -11,7 +11,7 @@ set -e
 
 # --- Edit these to match your setup ---
 MATLAB_BIN="matlab"
-GPU_DEVICE=3          # 1-based GPU index; check with gpuDeviceTable in MATLAB
+GPU_DEVICE=4          # 1-based GPU index; check with gpuDeviceTable in MATLAB
 # --------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
