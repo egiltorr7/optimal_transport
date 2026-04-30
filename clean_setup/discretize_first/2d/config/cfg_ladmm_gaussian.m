@@ -15,8 +15,8 @@ function cfg = cfg_ladmm_gaussian()
     cfg.ny = 128;
 
     % ADMM parameters
-    cfg.gamma    = 100;       % penalty parameter γ
-    cfg.tau      = 101;       % proximal penalty τ; convergence needs τ > γ*||A||² ≤ γ
+    cfg.gamma    = 0.1;       % penalty parameter γ
+    cfg.tau      = 0.11;      % proximal penalty τ; convergence needs τ > γ*||A||² ≤ γ
     cfg.alpha    = 1.0;       % over-relaxation (1 = standard, (1,2) = over-relaxed)
     cfg.vareps   = 0;         % Schrödinger bridge regularisation (0 = pure OT)
     cfg.max_iter = 10000;
