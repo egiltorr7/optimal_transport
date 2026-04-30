@@ -25,32 +25,32 @@ RES_DIR="${SCRIPT_DIR}/results"
 # Add/remove rows as needed.
 # =============================================================================
 JOBS=(
-#  nt   nx    ny    eps
-   "32   64    64   1e-4"
-   "32   64    64   1e-3"
-   "32   64    64   1e-2"
-   "32   64    64   1e-1"
-   "32   64    64   1"
-   "64   128   128  1e-4"
-   "64   128   128  1e-3"
-   "64   128   128  1e-2"
-   "64   128   128  1e-1"
-   "64   128   128  1"
-   "128  256   256  1e-4"
-   "128  256   256  1e-3"
-   "128  256   256  1e-2"
-   "128  256   256  1e-1"
-   "128  256   256  1"
-   "128  128   128  1e-4"
-   "128  128   128  1e-3"
-   "128  128   128  1e-2"
-   "128  128   128  1e-1"
-   "128  128   128  1"
-   "256  256   256  1e-4"
-   "256  256   256  1e-3"
-   "256  256   256  1e-2"
-   "256  256   256  1e-1"
-   "256  256   256  1"
+#  nt   nx    ny    eps    gamma  tau
+   "32   64    64   1e-4   0.1    0.11"
+   "32   64    64   1e-3   0.1    0.11"
+   "32   64    64   1e-2   0.1    0.11"
+   "32   64    64   1e-1   0.1    0.11"
+   "32   64    64   1      0.1    0.11"
+   "64   128   128  1e-4   0.1    0.11"
+   "64   128   128  1e-3   0.1    0.11"
+   "64   128   128  1e-2   0.1    0.11"
+   "64   128   128  1e-1   0.1    0.11"
+   "64   128   128  1      0.1    0.11"
+   "128  256   256  1e-4   0.1    0.11"
+   "128  256   256  1e-3   0.1    0.11"
+   "128  256   256  1e-2   0.1    0.11"
+   "128  256   256  1e-1   0.1    0.11"
+   "128  256   256  1      0.1    0.11"
+   "128  128   128  1e-4   0.1    0.11"
+   "128  128   128  1e-3   0.1    0.11"
+   "128  128   128  1e-2   0.1    0.11"
+   "128  128   128  1e-1   0.1    0.11"
+   "128  128   128  1      0.1    0.11"
+   "256  256   256  1e-4   0.1    0.11"
+   "256  256   256  1e-3   0.1    0.11"
+   "256  256   256  1e-2   0.1    0.11"
+   "256  256   256  1e-1   0.1    0.11"
+   "256  256   256  1      0.1    0.11"
 )
 # =============================================================================
 
@@ -59,7 +59,7 @@ mkdir -p "${RES_DIR}/figures"
 # CSV summary log (appended after each job so partial sweeps are recorded)
 LOG="${RES_DIR}/sweep_log.csv"
 if [ ! -f "${LOG}" ]; then
-    echo "job,nt,nx,ny,eps,status,bash_wall_s,matlab_wall_s,iters,converged,error" > "${LOG}"
+    echo "job,nt,nx,ny,eps,gamma,tau,status,bash_wall_s,matlab_wall_s,iters,converged,error" > "${LOG}"
 fi
 
 TOTAL=${#JOBS[@]}
@@ -67,7 +67,7 @@ IDX=0
 
 for JOB in "${JOBS[@]}"; do
     IDX=$((IDX + 1))
-    read -r NT NX NY EPS <<< "$JOB"
+    read -r NT NX NY EPS GAMMA TAU <<< "$JOB"
 
     echo ""
     echo "==> Job ${IDX}/${TOTAL}: nt=${NT} nx=${NX} ny=${NY} eps=${EPS}"
@@ -80,6 +80,8 @@ function cfg = cfg_ladmm_gaussian_run()
     cfg.nx         = ${NX};
     cfg.ny         = ${NY};
     cfg.vareps     = ${EPS};
+    cfg.gamma      = ${GAMMA};
+    cfg.tau        = ${TAU};
     cfg.use_gpu    = true;
     cfg.gpu_device = ${GPU_DEVICE};
 end
@@ -99,8 +101,8 @@ MEOF
     CONVERGED=$(echo "${MATLAB_OUT}"   | grep -oP 'converged=\K[0-9]' | head -1 || echo "NA")
     ERROR=$(echo "${MATLAB_OUT}"       | grep -oP 'error=\K[0-9.eE+-]+' | head -1 || echo "NA")
 
-    echo "   Job ${IDX}/${TOTAL} ${STATUS} — bash wall: ${BASH_WALL}s  matlab wall: ${MATLAB_WALL}s  iters: ${ITERS}  converged: ${CONVERGED}"
-    echo "${IDX},${NT},${NX},${NY},${EPS},${STATUS},${BASH_WALL},${MATLAB_WALL},${ITERS},${CONVERGED},${ERROR}" >> "${LOG}"
+    echo "   Job ${IDX}/${TOTAL} ${STATUS} — bash wall: ${BASH_WALL}s  matlab wall: ${MATLAB_WALL}s  iters: ${ITERS}  converged: ${CONVERGED}  gamma: ${GAMMA}"
+    echo "${IDX},${NT},${NX},${NY},${EPS},${GAMMA},${TAU},${STATUS},${BASH_WALL},${MATLAB_WALL},${ITERS},${CONVERGED},${ERROR}" >> "${LOG}"
 done
 
 echo ""
