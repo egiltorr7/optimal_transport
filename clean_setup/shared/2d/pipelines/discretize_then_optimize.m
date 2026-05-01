@@ -52,10 +52,13 @@ function result = discretize_then_optimize(cfg, problem)
     ops  = problem.ops;
 
     % Precompute banded FP projection factors
-    if isequal(cfg.projection, @proj_fokker_planck_banded)
+    if isequal(cfg.projection, @proj_fokker_planck_banded) || ...
+       isequal(cfg.projection, @proj_fokker_planck_backslash)
         problem.banded_proj = precomp_banded_proj(problem, cfg.vareps);
     elseif isequal(cfg.projection, @proj_fokker_planck_spike2)
         problem.banded_proj = precomp_banded_proj_spike2(problem, cfg.vareps);
+    elseif isequal(cfg.projection, @proj_fokker_planck_pcr)
+        problem.banded_proj = precomp_banded_proj_pcr(problem, cfg.vareps);
     end
 
     % --- GPU setup (cast all persistent arrays before closures are formed) ---
@@ -81,6 +84,18 @@ function result = discretize_then_optimize(cfg, problem)
             problem.banded_proj.spike_v          = gpuArray(problem.banded_proj.spike_v);
             problem.banded_proj.thomas_mults     = gpuArray(problem.banded_proj.thomas_mults);
             problem.banded_proj.spike_pivots_inv = gpuArray(problem.banded_proj.spike_pivots_inv);
+        elseif isequal(cfg.projection, @proj_fokker_planck_pcr)
+            problem.banded_proj.a_all    = gpuArray(problem.banded_proj.a_all);
+            problem.banded_proj.main_all = gpuArray(problem.banded_proj.main_all);
+            problem.banded_proj.c_all    = gpuArray(problem.banded_proj.c_all);
+            problem.banded_proj.a_buf    = gpuArray(problem.banded_proj.a_buf);
+            problem.banded_proj.b_buf    = gpuArray(problem.banded_proj.b_buf);
+            problem.banded_proj.c_buf    = gpuArray(problem.banded_proj.c_buf);
+            problem.banded_proj.d_buf    = gpuArray(problem.banded_proj.d_buf);
+            problem.banded_proj.a_new    = gpuArray(problem.banded_proj.a_new);
+            problem.banded_proj.b_new    = gpuArray(problem.banded_proj.b_new);
+            problem.banded_proj.c_new    = gpuArray(problem.banded_proj.c_new);
+            problem.banded_proj.d_new    = gpuArray(problem.banded_proj.d_new);
         end
     end
 

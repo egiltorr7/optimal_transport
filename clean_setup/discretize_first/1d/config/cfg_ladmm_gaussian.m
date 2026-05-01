@@ -10,8 +10,8 @@ function cfg = cfg_ladmm_gaussian()
     cfg.projection  = @proj_fokker_planck_banded;
 
     % Grid
-    cfg.nt = 64;
-    cfg.nx = 128;
+    cfg.nt = 256;
+    cfg.nx = 256;
 
     % ADMM parameters
     cfg.gamma    = 100;       % penalty parameter γ

@@ -2,7 +2,10 @@
 %
 %   Run this once at the start of any session working in sinkhorn_hopf_cole/1d/.
 
-base    = fileparts(mfilename('fullpath'));
+if ~exist('setup_paths_base', 'var')
+    setup_paths_base = fileparts(mfilename('fullpath'));
+end
+base    = setup_paths_base;
 sh_base = fullfile(base, '..', '..', 'shared');
 sh1d    = fullfile(sh_base, '1d');
 
