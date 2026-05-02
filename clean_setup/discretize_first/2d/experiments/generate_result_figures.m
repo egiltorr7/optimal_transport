@@ -5,6 +5,7 @@ function generate_result_figures(MAT_FILE, fig_dir)
 
 fprintf('Loading %s ...\n', MAT_FILE);
 load(MAT_FILE, 'result', 'cfg', 'problem', 'rho_ana_cc', 'obj', 'ftag');
+proj_label = strrep(func2str(cfg.projection), 'proj_fokker_planck_', '');
 
 rho_sink_cc = [];
 sink_result  = [];
@@ -70,7 +71,7 @@ for p = 1:n_snap
     title(sprintf('LADMM  t=%.2f', (k-0.5)*dt));
     xlabel('x'); ylabel('y');
 end
-sgtitle(sprintf('Density  eps=%.4g  iters=%d', cfg.vareps, result.iters));
+sgtitle(sprintf('Density  eps=%.4g  proj=%s  iters=%d', cfg.vareps, proj_label, result.iters));
 savefig(fig1, 'density'); close(fig1);
 
 % -------------------------------------------------------------------------
@@ -151,7 +152,7 @@ for p = 1:n_quiv
     title(sprintf('|m|  t=%.2f', (k-0.5)*dt));
     xlabel('x'); ylabel('y');
 end
-sgtitle(sprintf('Momentum magnitude + direction   eps=%.4g', cfg.vareps));
+sgtitle(sprintf('Momentum magnitude + direction   eps=%.4g  proj=%s', cfg.vareps, proj_label));
 savefig(fig3, 'momentum'); close(fig3);
 
 % -------------------------------------------------------------------------
@@ -238,7 +239,7 @@ if has_sink
         title(sprintf('LADMM  t=%.2f', (k-0.5)*dt));
         xlabel('x'); ylabel('y');
     end
-    sgtitle(sprintf('Density: LADMM vs Sinkhorn-Neumann   eps=%.4g', cfg.vareps));
+    sgtitle(sprintf('Density: LADMM vs Sinkhorn-Neumann   eps=%.4g  proj=%s', cfg.vareps, proj_label));
     savefig(fig8, 'density_vs_sinkhorn'); close(fig8);
 
     [~, iy] = min(abs(yy - 0.5));

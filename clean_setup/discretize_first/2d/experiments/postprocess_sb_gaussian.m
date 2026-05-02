@@ -18,6 +18,7 @@ if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 %% --- Select result ---
 % Set any field to filter; leave empty ([]) to match anything.
 % If multiple files match, the most recent is loaded.
+<<<<<<< HEAD
 sel.nt  = 128;      % e.g. 64
 sel.nx  = 128;      % e.g. 128
 <<<<<<< HEAD
@@ -31,6 +32,15 @@ sel.eps = 0.1;      % e.g. 0.01
 sel.gam = 100;      % e.g. 100
 sel.tau = 101;      % e.g. 101
 >>>>>>> b8df6d1576d2c8ffc705eb87d335d910e2ede0d3
+=======
+sel.nt   = 128;       % e.g. 64
+sel.nx   = 128;       % e.g. 128
+sel.ny   = 128;       % e.g. 128
+sel.eps  = 0.1;       % e.g. 0.01
+sel.gam  = 100;       % e.g. 100
+sel.tau  = 101;       % e.g. 101
+sel.proj = 'spike2';  % projection label, e.g. 'banded', 'spike2', 'pcr'; [] = any
+>>>>>>> 749a1807587304906d1ab2427c7c5cd1f87b1801
 
 mats = dir(fullfile(res_dir, 'result_*.mat'));
 if isempty(mats)
@@ -40,6 +50,7 @@ end
 keep = true(numel(mats), 1);
 tokens = {'nt','nx','ny','gam','tau','eps'};
 for i = 1:numel(mats)
+    % Numeric fields
     for j = 1:numel(tokens)
         f   = tokens{j};
         val = sel.(f);
@@ -47,6 +58,12 @@ for i = 1:numel(mats)
         tok = regexp(mats(i).name, [f '(\d+\.?\d*(?:[eE][+-]?\d+)?)'], 'tokens', 'once');
         if isempty(tok) || abs(str2double(tok{1}) - val) > 1e-10*(abs(val)+1)
             keep(i) = false;  break;
+        end
+    end
+    % Projection label (string match)
+    if keep(i) && ~isempty(sel.proj)
+        if isempty(regexp(mats(i).name, ['proj_' sel.proj], 'once'))
+            keep(i) = false;
         end
     end
 end

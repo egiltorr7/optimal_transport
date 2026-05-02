@@ -25,32 +25,32 @@ RES_DIR="${SCRIPT_DIR}/results"
 # Add/remove rows as needed.
 # =============================================================================
 JOBS=(
-#  nt   nx    ny    eps    gamma  tau
-   "32   64    64   1e-4   0.1    0.11"
-   "32   64    64   1e-3   0.1    0.11"
-   "32   64    64   1e-2   0.1    0.11"
-   "32   64    64   1e-1   0.1    0.11"
-   "32   64    64   1      0.1    0.11"
-   "64   128   128  1e-4   0.1    0.11"
-   "64   128   128  1e-3   0.1    0.11"
-   "64   128   128  1e-2   0.1    0.11"
-   "64   128   128  1e-1   0.1    0.11"
-   "64   128   128  1      0.1    0.11"
-   "128  256   256  1e-4   0.1    0.11"
-   "128  256   256  1e-3   0.1    0.11"
-   "128  256   256  1e-2   0.1    0.11"
-   "128  256   256  1e-1   0.1    0.11"
-   "128  256   256  1      0.1    0.11"
-   "128  128   128  1e-4   0.1    0.11"
-   "128  128   128  1e-3   0.1    0.11"
-   "128  128   128  1e-2   0.1    0.11"
-   "128  128   128  1e-1   0.1    0.11"
-   "128  128   128  1      0.1    0.11"
-   "256  256   256  1e-4   0.1    0.11"
-   "256  256   256  1e-3   0.1    0.11"
-   "256  256   256  1e-2   0.1    0.11"
-   "256  256   256  1e-1   0.1    0.11"
-   "256  256   256  1      0.1    0.11"
+#  nt   nx    ny    eps    gamma  tau    proj
+   "32   64    64   1e-4   0.1    0.11   proj_fokker_planck_spike2"
+   "32   64    64   1e-3   0.1    0.11   proj_fokker_planck_spike2"
+   "32   64    64   1e-2   0.1    0.11   proj_fokker_planck_spike2"
+   "32   64    64   1e-1   0.1    0.11   proj_fokker_planck_spike2"
+   "32   64    64   1      0.1    0.11   proj_fokker_planck_spike2"
+   "64   128   128  1e-4   0.1    0.11   proj_fokker_planck_spike2"
+   "64   128   128  1e-3   0.1    0.11   proj_fokker_planck_spike2"
+   "64   128   128  1e-2   0.1    0.11   proj_fokker_planck_spike2"
+   "64   128   128  1e-1   0.1    0.11   proj_fokker_planck_spike2"
+   "64   128   128  1      0.1    0.11   proj_fokker_planck_spike2"
+   "128  256   256  1e-4   0.1    0.11   proj_fokker_planck_spike2"
+   "128  256   256  1e-3   0.1    0.11   proj_fokker_planck_spike2"
+   "128  256   256  1e-2   0.1    0.11   proj_fokker_planck_spike2"
+   "128  256   256  1e-1   0.1    0.11   proj_fokker_planck_spike2"
+   "128  256   256  1      0.1    0.11   proj_fokker_planck_spike2"
+   "128  128   128  1e-4   0.1    0.11   proj_fokker_planck_spike2"
+   "128  128   128  1e-3   0.1    0.11   proj_fokker_planck_spike2"
+   "128  128   128  1e-2   0.1    0.11   proj_fokker_planck_spike2"
+   "128  128   128  1e-1   0.1    0.11   proj_fokker_planck_spike2"
+   "128  128   128  1      0.1    0.11   proj_fokker_planck_spike2"
+   "256  256   256  1e-4   0.1    0.11   proj_fokker_planck_spike2"
+   "256  256   256  1e-3   0.1    0.11   proj_fokker_planck_spike2"
+   "256  256   256  1e-2   0.1    0.11   proj_fokker_planck_spike2"
+   "256  256   256  1e-1   0.1    0.11   proj_fokker_planck_spike2"
+   "256  256   256  1      0.1    0.11   proj_fokker_planck_spike2"
 )
 # =============================================================================
 
@@ -67,10 +67,10 @@ IDX=0
 
 for JOB in "${JOBS[@]}"; do
     IDX=$((IDX + 1))
-    read -r NT NX NY EPS GAMMA TAU <<< "$JOB"
+    read -r NT NX NY EPS GAMMA TAU PROJ <<< "$JOB"
 
     echo ""
-    echo "==> Job ${IDX}/${TOTAL}: nt=${NT} nx=${NX} ny=${NY} eps=${EPS}"
+    echo "==> Job ${IDX}/${TOTAL}: nt=${NT} nx=${NX} ny=${NY} eps=${EPS} proj=${PROJ}"
 
     # Write cfg_ladmm_gaussian_run.m for this combo
     cat > "${CFG_DIR}/cfg_ladmm_gaussian_run.m" << MEOF
@@ -82,6 +82,7 @@ function cfg = cfg_ladmm_gaussian_run()
     cfg.vareps     = ${EPS};
     cfg.gamma      = ${GAMMA};
     cfg.tau        = ${TAU};
+    cfg.projection = @${PROJ};
     cfg.use_gpu    = true;
     cfg.gpu_device = ${GPU_DEVICE};
 end

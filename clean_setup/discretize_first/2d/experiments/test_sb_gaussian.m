@@ -55,8 +55,9 @@ if result.gpu_total_mb > 0
         result.gpu_mem_post_mb, result.gpu_total_mb);
 end
 
-ftag = sprintf('nt%d_nx%d_ny%d_gam%g_tau%g_eps%g', ...
-    cfg.nt, cfg.nx, cfg.ny, cfg.gamma, cfg.tau, cfg.vareps);
+proj_label = strrep(func2str(cfg.projection), 'proj_fokker_planck_', '');
+ftag = sprintf('nt%d_nx%d_ny%d_gam%g_tau%g_eps%g_proj_%s', ...
+    cfg.nt, cfg.nx, cfg.ny, cfg.gamma, cfg.tau, cfg.vareps, proj_label);
 
 %% --- Analytical solution ---
 [rho_ana, ~, ~] = analytical_sb_gaussian(problem, cfg.vareps);
