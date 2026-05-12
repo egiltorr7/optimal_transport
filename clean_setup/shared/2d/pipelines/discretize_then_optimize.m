@@ -164,6 +164,9 @@ function result = discretize_then_optimize(cfg, problem)
     admm_opts.tol      = cfg.tol;
     admm_opts.norm_fn  = norm_fn;
     admm_opts.use_gpu  = use_gpu;
+    if isfield(cfg, 'print_every')
+        admm_opts.print_every = cfg.print_every;
+    end
 
     % --- Solve ---
     % Snapshot GPU memory just before solve (all arrays allocated)
@@ -193,10 +196,13 @@ function result = discretize_then_optimize(cfg, problem)
     result.rho_cc    = y.rho;
     result.mx_cc     = y.mx;
     result.my_cc     = y.my;
-    result.residual   = info.residual;
+    result.res_x      = info.res_x;
+    result.res_y      = info.res_y;
+    result.res_primal = info.res_primal;
+    result.residual   = info.residual;    % backward compat alias (= res_x)
     result.iters      = info.iters;
     result.converged  = info.converged;
-    result.error      = info.residual(end);
+    result.error      = info.res_x(end);
     result.walltime   = info.walltime;
     result.iter_times = info.iter_times;
     result.cfg       = cfg;

@@ -173,6 +173,30 @@ fp_res = ops.deriv_t_at_phi(x_stag.rho, rho0, rho1) ...
        - cfg.vareps * nabla_rho;
 
 fp_per_time = squeeze(max(max(abs(fp_res), [], 2), [], 3));
+
+% --- Re-projection diagnostic ---
+% Apply the FP projection once more to x_stag and compare residuals.
+%   If residual drops to ~1e-14: x_stag is NOT the projected variable.
+%   If residual stays ~same:     the projection itself is that inaccurate
+%                                (backward-error degradation at this grid/eps).
+if ~isfield(problem, 'banded_proj')
+    if isequal(cfg.projection, @proj_fokker_planck_spike2)
+        problem.banded_proj = precomp_banded_proj_spike2(problem, cfg.vareps);
+    else
+        problem.banded_proj = precomp_banded_proj(problem, cfg.vareps);
+    end
+end
+x_stag2    = cfg.projection(x_stag, problem, cfg);
+rho_phi2   = ops.interp_t_at_phi(x_stag2.rho, rho0, rho1);
+nabla_rho2 = ops.deriv_x_at_phi(ops.deriv_x_at_m(rho_phi2), zeros_x, zeros_x) ...
+           + ops.deriv_y_at_phi(ops.deriv_y_at_m(rho_phi2), zeros_y, zeros_y);
+fp_res2 = ops.deriv_t_at_phi(x_stag2.rho, rho0, rho1) ...
+        + ops.deriv_x_at_phi(x_stag2.mx, zeros_x, zeros_x) ...
+        + ops.deriv_y_at_phi(x_stag2.my, zeros_y, zeros_y) ...
+        - cfg.vareps * nabla_rho2;
+fprintf('  FP max before re-projection: %.2e\n', max(abs(fp_res(:))));
+fprintf('  FP max after  re-projection: %.2e\n', max(abs(fp_res2(:))));
+
 t_phi = ((1:nt)' - 0.5) * dt;
 
 fig4 = figure('Name', 'FP residual', 'Position', [50 200 600 300]);
@@ -183,13 +207,21 @@ grid on;
 savefig(fig4, 'fp_residual'); close(fig4);
 
 % -------------------------------------------------------------------------
-% Figure 5: ADMM convergence
+% Figure 5: ADMM convergence -- all three residuals
 % -------------------------------------------------------------------------
-fig5 = figure('Name', 'ADMM residual', 'Position', [700 200 600 300]);
-semilogy(result.residual, 'b-', 'LineWidth', 1.5);
-yline(cfg.tol, 'r--', sprintf('tol = %.1e', cfg.tol));
-xlabel('Iteration'); ylabel('||y^{k+1} - y^k||');
+fig5 = figure('Name', 'ADMM residual', 'Position', [700 200 600 350]);
+hold on;
+if isfield(result, 'res_x')
+    semilogy(result.res_x,      'b-',  'LineWidth', 1.5, 'DisplayName', '||x^{k+1}-x^k||');
+    semilogy(result.res_y,      'r-',  'LineWidth', 1.5, 'DisplayName', '||y^{k+1}-y^k||');
+    semilogy(result.res_primal, 'g-',  'LineWidth', 1.5, 'DisplayName', '||Ax-y||');
+else
+    semilogy(result.residual, 'b-', 'LineWidth', 1.5, 'DisplayName', 'residual');
+end
+yline(cfg.tol, 'k--', sprintf('tol = %.1e', cfg.tol));
+xlabel('Iteration'); ylabel('Residual');
 title(sprintf('ADMM convergence   iters=%d  converged=%d', result.iters, result.converged));
+legend('Location', 'best');
 grid on;
 savefig(fig5, 'admm_residual'); close(fig5);
 

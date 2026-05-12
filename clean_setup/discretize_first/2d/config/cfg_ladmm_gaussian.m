@@ -8,22 +8,23 @@ function cfg = cfg_ladmm_gaussian()
     cfg.disc        = @disc_staggered_1st;
     cfg.prox_ke     = @prox_ke_cc;
     cfg.projection  = @proj_fokker_planck_banded;
+    % cfg.projection  = @proj_fokker_planck_spike2;
 
     % Grid
-    cfg.nt = 64;
-    cfg.nx = 128;
-    cfg.ny = 128;
+    cfg.nt = 32;
+    cfg.nx = 64;
+    cfg.ny = 64;
 
     % ADMM parameters
-    cfg.gamma    = 0.1;       % penalty parameter γ
-    cfg.tau      = 0.11;      % proximal penalty τ; convergence needs τ > γ*||A||² ≤ γ
+    cfg.gamma    = 100;       % penalty parameter γ
+    cfg.tau      = 1.05*cfg.gamma;      % proximal penalty τ; convergence needs τ > γ*||A||² ≤ γ
     cfg.alpha    = 1.0;       % over-relaxation (1 = standard, (1,2) = over-relaxed)
-    cfg.vareps   = 0;         % Schrödinger bridge regularisation (0 = pure OT)
+    cfg.vareps   = 1;         % Schrödinger bridge regularisation (0 = pure OT)
     cfg.max_iter = 10000;
     cfg.tol      = 1e-8;
 
     % GPU options (comment out or set use_gpu=false to run on CPU)
-    cfg.use_gpu    = true;
-    cfg.gpu_device = 1;    % device index (1-based); check with gpuDeviceCount / gpuDeviceTable
+    % cfg.use_gpu    = true;
+    % cfg.gpu_device = 1;    % device index (1-based); check with gpuDeviceCount / gpuDeviceTable
 
 end

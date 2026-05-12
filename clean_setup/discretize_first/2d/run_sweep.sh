@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# run_sweep.sh  --  Sweep over eps / grid combos on this machine's GPU.
+# run_sweep.sh  --  Sweep over grid/eps/gamma combos on this machine's GPU.
 #
 # Usage (run directly on the GPU machine):
 #   ./run_sweep.sh
 #
-# Edit the SWEEP PARAMETERS section below to set the combos you want.
+# Edit GRIDS and STEPS below.  All combinations are run as a cross-product.
 # Jobs run sequentially so only one GPU is used at a time.
 
 set -e
@@ -12,6 +12,7 @@ set -e
 # --- Edit these to match your setup ---
 MATLAB_BIN="matlab"
 GPU_DEVICE=1          # 1-based GPU index; check with gpuDeviceTable in MATLAB
+PROJ="proj_fokker_planck_spike2"
 # --------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -21,59 +22,61 @@ RES_DIR="${SCRIPT_DIR}/results"
 
 # =============================================================================
 # SWEEP PARAMETERS
-# Each row is one job: nt  nx  ny  eps
-# Add/remove rows as needed.
+#
+# GRIDS: one entry per line  ->  nt  nx  ny  eps
+# STEPS: one entry per line  ->  gamma  c      (tau = c * gamma)
+#                                               convergence needs tau > gamma * ||A||^2 <= gamma
+#                                               so c > 1 is the safe range
+#
+# All combinations of GRIDS x STEPS are run.
 # =============================================================================
-JOBS=(
-#  nt   nx    ny    eps    gamma  tau    proj
-   "32   64    64   1e-4   0.1    0.11   proj_fokker_planck_spike2"
-   "32   64    64   1e-3   0.1    0.11   proj_fokker_planck_spike2"
-   "32   64    64   1e-2   0.1    0.11   proj_fokker_planck_spike2"
-   "32   64    64   1e-1   0.1    0.11   proj_fokker_planck_spike2"
-   "32   64    64   1      0.1    0.11   proj_fokker_planck_spike2"
-   "64   128   128  1e-4   0.1    0.11   proj_fokker_planck_spike2"
-   "64   128   128  1e-3   0.1    0.11   proj_fokker_planck_spike2"
-   "64   128   128  1e-2   0.1    0.11   proj_fokker_planck_spike2"
-   "64   128   128  1e-1   0.1    0.11   proj_fokker_planck_spike2"
-   "64   128   128  1      0.1    0.11   proj_fokker_planck_spike2"
-   "128  256   256  1e-4   0.1    0.11   proj_fokker_planck_spike2"
-   "128  256   256  1e-3   0.1    0.11   proj_fokker_planck_spike2"
-   "128  256   256  1e-2   0.1    0.11   proj_fokker_planck_spike2"
-   "128  256   256  1e-1   0.1    0.11   proj_fokker_planck_spike2"
-   "128  256   256  1      0.1    0.11   proj_fokker_planck_spike2"
-   "128  128   128  1e-4   0.1    0.11   proj_fokker_planck_spike2"
-   "128  128   128  1e-3   0.1    0.11   proj_fokker_planck_spike2"
-   "128  128   128  1e-2   0.1    0.11   proj_fokker_planck_spike2"
-   "128  128   128  1e-1   0.1    0.11   proj_fokker_planck_spike2"
-   "128  128   128  1      0.1    0.11   proj_fokker_planck_spike2"
-   "256  256   256  1e-4   0.1    0.11   proj_fokker_planck_spike2"
-   "256  256   256  1e-3   0.1    0.11   proj_fokker_planck_spike2"
-   "256  256   256  1e-2   0.1    0.11   proj_fokker_planck_spike2"
-   "256  256   256  1e-1   0.1    0.11   proj_fokker_planck_spike2"
-   "256  256   256  1      0.1    0.11   proj_fokker_planck_spike2"
+GRIDS=(
+    "32   64    64   1e-4"
+    "32   64    64   1e-2"
+    "32   64    64   1e-1"
+    "32   64    64   1"
+    "64   128   128  1e-4"
+    "64   128   128  1e-2"
+    "64   128   128  1e-1"
+    "64   128   128  1"
+    "128  256   256  1e-4"
+    "128  256   256  1e-2"
+    "128  256   256  1e-1"
+    "128  256   256  1"
+)
+
+STEPS=(
+#  gamma   c
+   "0.01   1.1"
+   "0.05   1.1"
+   "0.1    1.1"
+   "0.5    1.1"
+   "1.0    1.1"
 )
 # =============================================================================
 
 mkdir -p "${RES_DIR}/figures"
 
-# CSV summary log (appended after each job so partial sweeps are recorded)
 LOG="${RES_DIR}/sweep_log.csv"
 if [ ! -f "${LOG}" ]; then
     echo "job,nt,nx,ny,eps,gamma,tau,status,bash_wall_s,matlab_wall_s,iters,converged,error" > "${LOG}"
 fi
 
-TOTAL=${#JOBS[@]}
+TOTAL=$(( ${#GRIDS[@]} * ${#STEPS[@]} ))
 IDX=0
 
-for JOB in "${JOBS[@]}"; do
-    IDX=$((IDX + 1))
-    read -r NT NX NY EPS GAMMA TAU PROJ <<< "$JOB"
+for GRID in "${GRIDS[@]}"; do
+    read -r NT NX NY EPS <<< "$GRID"
 
-    echo ""
-    echo "==> Job ${IDX}/${TOTAL}: nt=${NT} nx=${NX} ny=${NY} eps=${EPS} proj=${PROJ}"
+    for STEP in "${STEPS[@]}"; do
+        read -r GAMMA C <<< "$STEP"
+        TAU=$(awk "BEGIN {printf \"%.6g\", ${GAMMA} * ${C}}")
 
-    # Write cfg_ladmm_gaussian_run.m for this combo
-    cat > "${CFG_DIR}/cfg_ladmm_gaussian_run.m" << MEOF
+        IDX=$((IDX + 1))
+        echo ""
+        echo "==> Job ${IDX}/${TOTAL}: nt=${NT} nx=${NX} ny=${NY} eps=${EPS} gamma=${GAMMA} tau=${TAU}"
+
+        cat > "${CFG_DIR}/cfg_ladmm_gaussian_run.m" << MEOF
 function cfg = cfg_ladmm_gaussian_run()
     cfg            = cfg_ladmm_gaussian();
     cfg.nt         = ${NT};
@@ -88,22 +91,23 @@ function cfg = cfg_ladmm_gaussian_run()
 end
 MEOF
 
-    # Run MATLAB, capturing output and timing at the bash level
-    T_START=$(date +%s)
-    MATLAB_OUT=$("${MATLAB_BIN}" -nodisplay -nosplash -batch "cd('${EXP_DIR}'); test_sb_gaussian;" 2>&1) && STATUS="OK" || STATUS="FAILED"
-    T_END=$(date +%s)
-    BASH_WALL=$((T_END - T_START))
+        T_START=$(date +%s)
+        MATLAB_OUT=$("${MATLAB_BIN}" -nodisplay -nosplash -batch \
+            "cd('${EXP_DIR}'); test_sb_gaussian;" 2>&1) \
+            && STATUS="OK" || STATUS="FAILED"
+        T_END=$(date +%s)
+        BASH_WALL=$((T_END - T_START))
 
-    echo "${MATLAB_OUT}"
+        echo "${MATLAB_OUT}"
 
-    # Parse key stats from MATLAB stdout
-    MATLAB_WALL=$(echo "${MATLAB_OUT}" | grep -oP 'wall=\K[0-9.]+' | head -1 || echo "NA")
-    ITERS=$(echo "${MATLAB_OUT}"       | grep -oP 'iters=\K[0-9]+'  | head -1 || echo "NA")
-    CONVERGED=$(echo "${MATLAB_OUT}"   | grep -oP 'converged=\K[0-9]' | head -1 || echo "NA")
-    ERROR=$(echo "${MATLAB_OUT}"       | grep -oP 'error=\K[0-9.eE+-]+' | head -1 || echo "NA")
+        MATLAB_WALL=$(echo "${MATLAB_OUT}" | grep -oP 'wall=\K[0-9.]+'     | head -1 || echo "NA")
+        ITERS=$(echo "${MATLAB_OUT}"       | grep -oP 'iters=\K[0-9]+'      | head -1 || echo "NA")
+        CONVERGED=$(echo "${MATLAB_OUT}"   | grep -oP 'converged=\K[0-9]'   | head -1 || echo "NA")
+        ERROR=$(echo "${MATLAB_OUT}"       | grep -oP 'error=\K[0-9.eE+-]+' | head -1 || echo "NA")
 
-    echo "   Job ${IDX}/${TOTAL} ${STATUS} — bash wall: ${BASH_WALL}s  matlab wall: ${MATLAB_WALL}s  iters: ${ITERS}  converged: ${CONVERGED}  gamma: ${GAMMA}"
-    echo "${IDX},${NT},${NX},${NY},${EPS},${GAMMA},${TAU},${STATUS},${BASH_WALL},${MATLAB_WALL},${ITERS},${CONVERGED},${ERROR}" >> "${LOG}"
+        echo "   Job ${IDX}/${TOTAL} ${STATUS} — bash wall: ${BASH_WALL}s  matlab: ${MATLAB_WALL}s  iters: ${ITERS}  converged: ${CONVERGED}  gamma: ${GAMMA}  tau: ${TAU}"
+        echo "${IDX},${NT},${NX},${NY},${EPS},${GAMMA},${TAU},${STATUS},${BASH_WALL},${MATLAB_WALL},${ITERS},${CONVERGED},${ERROR}" >> "${LOG}"
+    done
 done
 
 echo ""
