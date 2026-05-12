@@ -21,10 +21,11 @@ if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 sel.nt   = 128;       % e.g. 64
 sel.nx   = 128;       % e.g. 128
 sel.ny   = 128;       % e.g. 128
-sel.eps  = 0.1;       % e.g. 0.01
-sel.gam  = 100;       % e.g. 100
-sel.tau  = 101;       % e.g. 101
+sel.eps  = 1;       % e.g. 0.01
+sel.gam  = 0.1;       % e.g. 100
+sel.tau  = 0.11;       % e.g. 101
 sel.proj = 'spike2';  % projection label, e.g. 'banded', 'spike2', 'pcr'; [] = any
+
 
 mats = dir(fullfile(res_dir, 'result_*.mat'));
 if isempty(mats)

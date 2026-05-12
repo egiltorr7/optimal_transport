@@ -40,10 +40,12 @@ function x_out = proj_fokker_planck_banded(x_in, problem, cfg)
       + ops.deriv_y_at_phi(psi_y, zeros_y, zeros_y) ...
       - vareps * nabla_mu;
 
+    % This can probably be removed %
     if norm(f(:)) * sqrt(problem.dt * problem.dx * problem.dy) < 1e-12
         x_out = x_in;
         return;
     end
+    % Until here %
 
     %% --- 2D DCT in x and y ---
     f_hat = dct2_xy(f, nt, nx, ny);   % (nt x nx x ny)

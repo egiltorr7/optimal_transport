@@ -40,7 +40,7 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
 %     opts.tau        proximal penalty τ for x-update (> 0, τ > γ||A||²)
 %     opts.alpha      over-relaxation parameter (default 1.0)
 %     opts.max_iter   maximum iterations
-%     opts.tol        convergence tolerance on ||y^{t+1} - y^t|| (norm_fn)
+%     opts.tol        convergence tolerance on ||x^{t+1} - x^t|| (norm_fn)
 %     opts.norm_fn    @(v) -> scalar   norm for convergence (default: struct norm)
 %
 %   Optional opts fields:
@@ -54,7 +54,10 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
 %   Outputs:
 %     x, y      primal variables at termination
 %     delta     dual variable at termination (unscaled, same type as b)
-%     info.residual   (n_iters x 1)  ||y^{t+1} - y^t|| at each iteration
+%     info.res_x      (n_iters x 1)  ||x^{t+1} - x^t||  -- convergence criterion
+%     info.res_y      (n_iters x 1)  ||y^{t+1} - y^t||
+%     info.res_primal (n_iters x 1)  ||A*x - y||         -- primal feasibility
+%     info.residual   alias for info.res_x (backward compat)
 %     info.iters      number of iterations taken
 %     info.converged  true if stopped due to tolerance
 %     info.stalled    true if residual stopped decreasing before convergence
@@ -83,7 +86,9 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
     delta = s_zeros(b);
     By    = B_fn(y0);     % cache B*y to avoid calling B_fn twice per iteration
 
-    residual = zeros(max_iter, 1);
+    res_x       = zeros(max_iter, 1);
+    res_y       = zeros(max_iter, 1);
+    res_primal  = zeros(max_iter, 1);
     stalled  = false;
     diverged = false;
 
@@ -96,13 +101,14 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
     iter_times_win = zeros(max(print_every, 1), 1);  % ring buffer for print window average
 
     if print_every > 0
-        fprintf('  [ADMM]  iter       residual      best res   sec/iter  [prox / ke / norm / ops]    ETA\n');
-        fprintf('  --------------------------------------------------------------------------------------\n');
+        fprintf('  [ADMM]  iter       res_x         res_y         primal        best_x     sec/iter  [prox / ke / norm / ops]    ETA\n');
+        fprintf('  -----------------------------------------------------------------------------------------------------------------\n');
     end
 
     for t = 1:max_iter
 
         t_iter_start = tic;
+        x_prev  = x;
         y_prev  = y;
         By_prev = By;
 
@@ -131,20 +137,24 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
         delta = s_sub(delta, s_scale(gamma, s_sub(s_add(z_hat, By), b)));
         if debug_timing, t_ops = t_ops + toc(tw); end
 
-        % --- residual ---
+        % --- residuals ---
         if debug_timing, tw = tic; end
-        residual(t) = norm_fn(s_sub(y, y_prev));
+        res_x(t)      = norm_fn(s_sub(x, x_prev));
+        res_y(t)      = norm_fn(s_sub(y, y_prev));
+        res_primal(t) = norm_fn(s_sub(Ax, y));
         if debug_timing, t_norm = t_norm + toc(tw); end
 
         iter_times(t) = toc(t_iter_start);
         iter_times_win(mod(t-1, numel(iter_times_win))+1) = iter_times(t);
 
         % --- NaN / Inf detection ---
-        if ~isfinite(residual(t))
+        if ~isfinite(res_x(t))
             diverged = true;
-            residual = residual(1:t);
+            res_x      = res_x(1:t);
+            res_y      = res_y(1:t);
+            res_primal = res_primal(1:t);
             if print_every > 0
-                fprintf('  [ADMM]  *** DIVERGED at iter %d: residual = %g ***\n', t, residual(t));
+                fprintf('  [ADMM]  *** DIVERGED at iter %d: res_x = %g ***\n', t, res_x(t));
                 fprintf('  [ADMM]  Possible cause: Thomas instability (eps/dt > 1). Try proj_fokker_planck_spike2.\n');
             end
             break;
@@ -157,18 +167,20 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
 
         % --- stall detection: residual not decreasing over stall_window iters ---
         if t > stall_window
-            ratio = residual(t) / residual(t - stall_window);
+            ratio = res_x(t) / res_x(t - stall_window);
             stalled = ratio > stall_tol;
         end
 
         % --- convergence ---
-        if residual(t) < tol
-            residual = residual(1:t);
+        if res_x(t) < tol
+            res_x      = res_x(1:t);
+            res_y      = res_y(1:t);
+            res_primal = res_primal(1:t);
             if print_every > 0
-                best_res = min(residual);
+                best_res = min(res_x);
                 sec_iter = mean(iter_times_win(iter_times_win > 0));
-                fprintf('  [ADMM]  %6d/%d   %10.3e   %10.3e   %7.3fs  CONVERGED\n', ...
-                    t, max_iter, residual(end), best_res, sec_iter);
+                fprintf('  [ADMM]  %6d/%d   %10.3e   %10.3e   %10.3e   %10.3e   %7.3fs  CONVERGED\n', ...
+                    t, max_iter, res_x(end), res_y(end), res_primal(end), best_res, sec_iter);
             end
             t_prox = 0;  t_ke = 0;  t_norm = 0;  t_ops = 0;
             break;
@@ -176,22 +188,22 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
 
         % --- periodic progress print ---
         if print_every > 0 && mod(t, print_every) == 0
-            best_res = min(residual(1:t));
+            best_res = min(res_x(1:t));
             sec_iter = mean(iter_times_win(iter_times_win > 0));
             remaining = (max_iter - t) * sec_iter;
             % Estimate ETA from convergence rate (geometric decay over stall_window)
-            if t > stall_window && residual(t) > 0 && residual(t - stall_window) > 0
-                decay_rate = (residual(t) / residual(t - stall_window)) ^ (1/stall_window);
+            if t > stall_window && res_x(t) > 0 && res_x(t - stall_window) > 0
+                decay_rate = (res_x(t) / res_x(t - stall_window)) ^ (1/stall_window);
                 if decay_rate < 1
-                    iters_to_tol = log(tol / residual(t)) / log(decay_rate);
+                    iters_to_tol = log(tol / res_x(t)) / log(decay_rate);
                     remaining = min(remaining, iters_to_tol * sec_iter);
                 end
             end
             stall_str = '';
             if stalled, stall_str = '  *** STALLED ***'; end
             n_win = min(t, print_every);   % actual window size (< print_every on first print)
-            fprintf('  [ADMM]  %6d/%d   %10.3e   %10.3e   %7.3fs  [%.3f / %.3f / %.3f / %.3f]  ETA %s%s\n', ...
-                t, max_iter, residual(t), best_res, sec_iter, ...
+            fprintf('  [ADMM]  %6d/%d   %10.3e   %10.3e   %10.3e   %10.3e   %7.3fs  [%.3f / %.3f / %.3f / %.3f]  ETA %s%s\n', ...
+                t, max_iter, res_x(t), res_y(t), res_primal(t), best_res, sec_iter, ...
                 t_prox/n_win, t_ke/n_win, t_norm/n_win, t_ops/n_win, ...
                 format_eta(remaining), stall_str);
             % Reset accumulators for next window
@@ -199,9 +211,12 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
         end
     end
 
-    info.residual   = residual;
-    info.iters      = length(residual);
-    info.converged  = ~diverged && residual(end) < tol;
+    info.res_x      = res_x;
+    info.res_y      = res_y;
+    info.res_primal = res_primal;
+    info.residual   = res_x;   % backward compat alias
+    info.iters      = length(res_x);
+    info.converged  = ~diverged && res_x(end) < tol;
     info.stalled    = stalled && ~info.converged;
     info.diverged   = diverged;
     info.walltime   = toc(t_start);
