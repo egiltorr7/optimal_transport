@@ -1,7 +1,20 @@
-function generate_result_figures(MAT_FILE, fig_dir)
-% GENERATE_RESULT_FIGURES  Load a result .mat and save all figures to fig_dir.
+function generate_result_figures(MAT_FILE, fig_dir, fig_names)
+% GENERATE_RESULT_FIGURES  Load a result .mat and save figures to fig_dir.
 %   Called by postprocess_sb_gaussian.m (single file) and
 %   batch_postprocess.m (all unprocessed files).
+%
+%   generate_result_figures(MAT_FILE, fig_dir)
+%       Generates all figures.
+%
+%   generate_result_figures(MAT_FILE, fig_dir, fig_names)
+%       Generates only the named figures.  fig_names is a cell array of
+%       strings from:  'density', 'xslice', 'diagslice', 'momentum',
+%                      'fp_residual', 'admm_residual', 'l2error',
+%                      'mass_conservation',
+%                      'density_vs_sinkhorn', 'xslice_vs_sinkhorn',
+%                      'l2error_vs_sinkhorn', 'mass_vs_sinkhorn'
+
+if nargin < 3, fig_names = {}; end   % empty = generate all
 
 fprintf('Loading %s ...\n', MAT_FILE);
 load(MAT_FILE, 'result', 'cfg', 'problem', 'rho_ana_cc', 'obj', 'ftag');
@@ -56,53 +69,57 @@ clim_max = max(rho_ana_cc(:));
 % -------------------------------------------------------------------------
 % Figure 1: density heatmaps -- analytical vs numerical
 % -------------------------------------------------------------------------
-fig1 = figure('Name', 'Density snapshots', 'Position', [50 50 1200 500]);
-for p = 1:n_snap
-    k = k_snap(p);
-    subplot(2, n_snap, p);
-    imagesc(xx, yy, squeeze(rho_ana_cc(k,:,:))');
-    axis xy; colorbar; clim([0 clim_max]);
-    title(sprintf('Ana  t=%.2f', (k-0.5)*dt));
-    xlabel('x'); ylabel('y');
+if want('density', fig_names)
+    fig1 = figure('Name', 'Density snapshots', 'Position', [50 50 1200 500]);
+    for p = 1:n_snap
+        k = k_snap(p);
+        subplot(2, n_snap, p);
+        imagesc(xx, yy, squeeze(rho_ana_cc(k,:,:))');
+        axis xy; colorbar; clim([0 clim_max]);
+        title(sprintf('Ana  t=%.2f', (k-0.5)*dt));
+        xlabel('x'); ylabel('y');
 
-    subplot(2, n_snap, n_snap + p);
-    imagesc(xx, yy, squeeze(rho_num_cc(k,:,:))');
-    axis xy; colorbar; clim([0 clim_max]);
-    title(sprintf('LADMM  t=%.2f', (k-0.5)*dt));
-    xlabel('x'); ylabel('y');
+        subplot(2, n_snap, n_snap + p);
+        imagesc(xx, yy, squeeze(rho_num_cc(k,:,:))');
+        axis xy; colorbar; clim([0 clim_max]);
+        title(sprintf('LADMM  t=%.2f', (k-0.5)*dt));
+        xlabel('x'); ylabel('y');
+    end
+    sgtitle(sprintf('Density  eps=%.4g  proj=%s  iters=%d', cfg.vareps, proj_label, result.iters));
+    savefig(fig1, 'density'); close(fig1);
 end
-sgtitle(sprintf('Density  eps=%.4g  proj=%s  iters=%d', cfg.vareps, proj_label, result.iters));
-savefig(fig1, 'density'); close(fig1);
 
 % -------------------------------------------------------------------------
 % Figure 2: x-slice at y = 0.5 vs analytical
 % -------------------------------------------------------------------------
-[~, iy] = min(abs(yy - 0.5));
+if want('xslice', fig_names)
+    [~, iy] = min(abs(yy - 0.5));
 
-fig2 = figure('Name', 'x-slice at y=0.5', 'Position', [50 600 700 400]);
-hold on;
-leg_handles = gobjects(n_snap, 2);
-for p = 1:n_snap
-    k = k_snap(p);
-    leg_handles(p,1) = plot(xx, rho_ana_cc(k,:,iy), '-',  'Color', colors(p,:), 'LineWidth', 1.5);
-    leg_handles(p,2) = plot(xx, rho_num_cc(k,:,iy), 'o--','Color', colors(p,:), 'MarkerSize', 4);
+    fig2 = figure('Name', 'x-slice at y=0.5', 'Position', [50 600 700 400]);
+    hold on;
+    leg_handles = gobjects(n_snap, 2);
+    for p = 1:n_snap
+        k = k_snap(p);
+        leg_handles(p,1) = plot(xx, rho_ana_cc(k,:,iy), '-',  'Color', colors(p,:), 'LineWidth', 1.5);
+        leg_handles(p,2) = plot(xx, rho_num_cc(k,:,iy), 'o--','Color', colors(p,:), 'MarkerSize', 4);
+    end
+    leg_str = cell(n_snap, 2);
+    for p = 1:n_snap
+        k = k_snap(p);
+        leg_str{p,1} = sprintf('Ana   t=%.2f', (k-0.5)*dt);
+        leg_str{p,2} = sprintf('LADMM t=%.2f', (k-0.5)*dt);
+    end
+    legend(leg_handles(:), leg_str(:), 'Location', 'best', 'FontSize', 7);
+    xlabel('x'); ylabel('\rho(t,x,y=0.5)');
+    title(sprintf('x-slice at y=0.5   eps=%.4g', cfg.vareps));
+    grid on;
+    savefig(fig2, 'xslice'); close(fig2);
 end
-leg_str = cell(n_snap, 2);
-for p = 1:n_snap
-    k = k_snap(p);
-    leg_str{p,1} = sprintf('Ana   t=%.2f', (k-0.5)*dt);
-    leg_str{p,2} = sprintf('LADMM t=%.2f', (k-0.5)*dt);
-end
-legend(leg_handles(:), leg_str(:), 'Location', 'best', 'FontSize', 7);
-xlabel('x'); ylabel('\rho(t,x,y=0.5)');
-title(sprintf('x-slice at y=0.5   eps=%.4g', cfg.vareps));
-grid on;
-savefig(fig2, 'xslice'); close(fig2);
 
 % -------------------------------------------------------------------------
 % Figure 2b: diagonal slice along y = x
 % -------------------------------------------------------------------------
-if nx == ny
+if nx == ny && want('diagslice', fig_names)
     fig2b = figure('Name', 'Diagonal slice y=x', 'Position', [50 1050 700 400]);
     hold on;
     leg_handles2 = gobjects(n_snap, 2);
@@ -130,126 +147,138 @@ end
 % -------------------------------------------------------------------------
 % Figure 3: momentum magnitude heatmaps + quiver
 % -------------------------------------------------------------------------
-mx_cc = result.mx_cc;
-my_cc = result.my_cc;
+if want('momentum', fig_names)
+    mx_cc = result.mx_cc;
+    my_cc = result.my_cc;
 
-n_quiv = 3;
-k_quiv = max(1, round([0.25, 0.5, 0.75] * nt));
-stride = max(1, floor(min(nx, ny) / 16));
+    n_quiv = 3;
+    k_quiv = max(1, round([0.25, 0.5, 0.75] * nt));
+    stride = max(1, floor(min(nx, ny) / 16));
 
-fig3 = figure('Name', 'Momentum field', 'Position', [800 50 900 300]);
-for p = 1:n_quiv
-    k = k_quiv(p);
-    m_mag = sqrt(squeeze(mx_cc(k,:,:)).^2 + squeeze(my_cc(k,:,:)).^2);
-    subplot(1, n_quiv, p);
-    imagesc(xx, yy, m_mag');
-    axis xy; colorbar; hold on;
-    xi = 1:stride:nx;  yi = 1:stride:ny;
-    [Xq, Yq] = meshgrid(xx(xi), yy(yi));
-    Uq = squeeze(mx_cc(k, xi, yi))';
-    Vq = squeeze(my_cc(k, xi, yi))';
-    quiver(Xq, Yq, Uq, Vq, 0.8, 'w', 'LineWidth', 0.8);
-    title(sprintf('|m|  t=%.2f', (k-0.5)*dt));
-    xlabel('x'); ylabel('y');
+    fig3 = figure('Name', 'Momentum field', 'Position', [800 50 900 300]);
+    for p = 1:n_quiv
+        k = k_quiv(p);
+        m_mag = sqrt(squeeze(mx_cc(k,:,:)).^2 + squeeze(my_cc(k,:,:)).^2);
+        subplot(1, n_quiv, p);
+        imagesc(xx, yy, m_mag');
+        axis xy; colorbar; hold on;
+        xi = 1:stride:nx;  yi = 1:stride:ny;
+        [Xq, Yq] = meshgrid(xx(xi), yy(yi));
+        Uq = squeeze(mx_cc(k, xi, yi))';
+        Vq = squeeze(my_cc(k, xi, yi))';
+        quiver(Xq, Yq, Uq, Vq, 0.8, 'w', 'LineWidth', 0.8);
+        title(sprintf('|m|  t=%.2f', (k-0.5)*dt));
+        xlabel('x'); ylabel('y');
+    end
+    sgtitle(sprintf('Momentum magnitude + direction   eps=%.4g  proj=%s', cfg.vareps, proj_label));
+    savefig(fig3, 'momentum'); close(fig3);
 end
-sgtitle(sprintf('Momentum magnitude + direction   eps=%.4g  proj=%s', cfg.vareps, proj_label));
-savefig(fig3, 'momentum'); close(fig3);
 
 % -------------------------------------------------------------------------
 % Figure 4: FP residual over domain
 % -------------------------------------------------------------------------
-zeros_x = zeros(nt, ny);
-zeros_y = zeros(nt, nx);
-x_stag.rho = result.rho_stag;
-x_stag.mx  = result.mx_stag;
-x_stag.my  = result.my_stag;
+if want('fp_residual', fig_names)
+    zeros_x = zeros(nt, ny);
+    zeros_y = zeros(nt, nx);
+    x_stag.rho = result.rho_stag;
+    x_stag.mx  = result.mx_stag;
+    x_stag.my  = result.my_stag;
 
-rho_phi   = ops.interp_t_at_phi(x_stag.rho, rho0, rho1);
-nabla_rho = ops.deriv_x_at_phi(ops.deriv_x_at_m(rho_phi), zeros_x, zeros_x) ...
-          + ops.deriv_y_at_phi(ops.deriv_y_at_m(rho_phi), zeros_y, zeros_y);
-fp_res = ops.deriv_t_at_phi(x_stag.rho, rho0, rho1) ...
-       + ops.deriv_x_at_phi(x_stag.mx, zeros_x, zeros_x) ...
-       + ops.deriv_y_at_phi(x_stag.my, zeros_y, zeros_y) ...
-       - cfg.vareps * nabla_rho;
+    rho_phi   = ops.interp_t_at_phi(x_stag.rho, rho0, rho1);
+    nabla_rho = ops.deriv_x_at_phi(ops.deriv_x_at_m(rho_phi), zeros_x, zeros_x) ...
+              + ops.deriv_y_at_phi(ops.deriv_y_at_m(rho_phi), zeros_y, zeros_y);
+    fp_res = ops.deriv_t_at_phi(x_stag.rho, rho0, rho1) ...
+           + ops.deriv_x_at_phi(x_stag.mx, zeros_x, zeros_x) ...
+           + ops.deriv_y_at_phi(x_stag.my, zeros_y, zeros_y) ...
+           - cfg.vareps * nabla_rho;
 
-fp_per_time = squeeze(max(max(abs(fp_res), [], 2), [], 3));
+    fp_per_time = squeeze(max(max(abs(fp_res), [], 2), [], 3));
 
-% --- Re-projection diagnostic ---
-% Apply the FP projection once more to x_stag and compare residuals.
-%   If residual drops to ~1e-14: x_stag is NOT the projected variable.
-%   If residual stays ~same:     the projection itself is that inaccurate
-%                                (backward-error degradation at this grid/eps).
-if ~isfield(problem, 'banded_proj')
-    if isequal(cfg.projection, @proj_fokker_planck_spike2)
-        problem.banded_proj = precomp_banded_proj_spike2(problem, cfg.vareps);
-    else
-        problem.banded_proj = precomp_banded_proj(problem, cfg.vareps);
+    % Re-projection diagnostic
+    if ~isfield(problem, 'banded_proj')
+        if isequal(cfg.projection, @proj_fokker_planck_spike2)
+            problem.banded_proj = precomp_banded_proj_spike2(problem, cfg.vareps);
+        else
+            problem.banded_proj = precomp_banded_proj(problem, cfg.vareps);
+        end
     end
+    x_stag2    = cfg.projection(x_stag, problem, cfg);
+    rho_phi2   = ops.interp_t_at_phi(x_stag2.rho, rho0, rho1);
+    nabla_rho2 = ops.deriv_x_at_phi(ops.deriv_x_at_m(rho_phi2), zeros_x, zeros_x) ...
+               + ops.deriv_y_at_phi(ops.deriv_y_at_m(rho_phi2), zeros_y, zeros_y);
+    fp_res2 = ops.deriv_t_at_phi(x_stag2.rho, rho0, rho1) ...
+            + ops.deriv_x_at_phi(x_stag2.mx, zeros_x, zeros_x) ...
+            + ops.deriv_y_at_phi(x_stag2.my, zeros_y, zeros_y) ...
+            - cfg.vareps * nabla_rho2;
+    fprintf('  FP max before re-projection: %.2e\n', max(abs(fp_res(:))));
+    fprintf('  FP max after  re-projection: %.2e\n', max(abs(fp_res2(:))));
+
+    t_phi = ((1:nt)' - 0.5) * dt;
+
+    fig4 = figure('Name', 'FP residual', 'Position', [50 200 600 300]);
+    semilogy(t_phi, fp_per_time, 'b-', 'LineWidth', 1.5);
+    xlabel('t'); ylabel('max_{x,y} |FP residual|');
+    title(sprintf('FP constraint residual (max over space)   max=%.2e', max(fp_per_time)));
+    grid on;
+    savefig(fig4, 'fp_residual'); close(fig4);
 end
-x_stag2    = cfg.projection(x_stag, problem, cfg);
-rho_phi2   = ops.interp_t_at_phi(x_stag2.rho, rho0, rho1);
-nabla_rho2 = ops.deriv_x_at_phi(ops.deriv_x_at_m(rho_phi2), zeros_x, zeros_x) ...
-           + ops.deriv_y_at_phi(ops.deriv_y_at_m(rho_phi2), zeros_y, zeros_y);
-fp_res2 = ops.deriv_t_at_phi(x_stag2.rho, rho0, rho1) ...
-        + ops.deriv_x_at_phi(x_stag2.mx, zeros_x, zeros_x) ...
-        + ops.deriv_y_at_phi(x_stag2.my, zeros_y, zeros_y) ...
-        - cfg.vareps * nabla_rho2;
-fprintf('  FP max before re-projection: %.2e\n', max(abs(fp_res(:))));
-fprintf('  FP max after  re-projection: %.2e\n', max(abs(fp_res2(:))));
-
-t_phi = ((1:nt)' - 0.5) * dt;
-
-fig4 = figure('Name', 'FP residual', 'Position', [50 200 600 300]);
-semilogy(t_phi, fp_per_time, 'b-', 'LineWidth', 1.5);
-xlabel('t'); ylabel('max_{x,y} |FP residual|');
-title(sprintf('FP constraint residual (max over space)   max=%.2e', max(fp_per_time)));
-grid on;
-savefig(fig4, 'fp_residual'); close(fig4);
 
 % -------------------------------------------------------------------------
 % Figure 5: ADMM convergence -- all three residuals
 % -------------------------------------------------------------------------
-fig5 = figure('Name', 'ADMM residual', 'Position', [700 200 600 350]);
-hold on;
-if isfield(result, 'res_x')
-    semilogy(result.res_x,      'b-',  'LineWidth', 1.5, 'DisplayName', '||x^{k+1}-x^k||');
-    semilogy(result.res_y,      'r-',  'LineWidth', 1.5, 'DisplayName', '||y^{k+1}-y^k||');
-    semilogy(result.res_primal, 'g-',  'LineWidth', 1.5, 'DisplayName', '||Ax-y||');
-else
-    semilogy(result.residual, 'b-', 'LineWidth', 1.5, 'DisplayName', 'residual');
+if want('admm_residual', fig_names)
+    fig5 = figure('Name', 'ADMM residual', 'Position', [700 200 600 350]);
+    skip = 10;
+    if isfield(result, 'res_x')
+        iters5 = (skip+1 : result.iters)';
+        semilogy(iters5, result.res_x(skip+1:end),      'b-',  'LineWidth', 1.5, 'DisplayName', '||x^{k+1}-x^k||');
+        hold on;
+        semilogy(iters5, result.res_y(skip+1:end),      'r-',  'LineWidth', 1.5, 'DisplayName', '||y^{k+1}-y^k||');
+        semilogy(iters5, result.res_primal(skip+1:end), 'g-',  'LineWidth', 1.5, 'DisplayName', '||Ax-y||');
+    else
+        iters5 = (skip+1 : numel(result.residual))';
+        semilogy(iters5, result.residual(skip+1:end), 'b-', 'LineWidth', 1.5, 'DisplayName', 'residual');
+        hold on;
+    end
+    set(gca, 'YScale', 'log');
+    yline(cfg.tol, 'k--', sprintf('tol = %.1e', cfg.tol));
+    xlabel('Iteration'); ylabel('Residual');
+    title(sprintf('ADMM convergence   iters=%d  converged=%d', result.iters, result.converged));
+    legend('Location', 'best');
+    grid on;
+    savefig(fig5, 'admm_residual'); close(fig5);
 end
-yline(cfg.tol, 'k--', sprintf('tol = %.1e', cfg.tol));
-xlabel('Iteration'); ylabel('Residual');
-title(sprintf('ADMM convergence   iters=%d  converged=%d', result.iters, result.converged));
-legend('Location', 'best');
-grid on;
-savefig(fig5, 'admm_residual'); close(fig5);
 
 % -------------------------------------------------------------------------
 % Figure 6: L2 error vs analytical
 % -------------------------------------------------------------------------
-t_cc   = ((1:nt)' - 0.5) * dt;
-l2_err = sqrt(dx * dy * sum(sum((rho_num_cc - rho_ana_cc).^2, 2), 3));
+if want('l2error', fig_names)
+    t_cc   = ((1:nt)' - 0.5) * dt;
+    l2_err = sqrt(dx * dy * sum(sum((rho_num_cc - rho_ana_cc).^2, 2), 3));
 
-fig6 = figure('Name', 'L2 error', 'Position', [700 550 600 300]);
-plot(t_cc, l2_err, 'b-', 'LineWidth', 1.5);
-xlabel('t'); ylabel('||\rho_{num} - \rho_{ana}||_{L^2(x,y)}');
-title(sprintf('L^2 error vs analytical SB   mean=%.2e', mean(l2_err)));
-grid on;
-savefig(fig6, 'l2error'); close(fig6);
+    fig6 = figure('Name', 'L2 error', 'Position', [700 550 600 300]);
+    plot(t_cc, l2_err, 'b-', 'LineWidth', 1.5);
+    xlabel('t'); ylabel('||\rho_{num} - \rho_{ana}||_{L^2(x,y)}');
+    title(sprintf('L^2 error vs analytical SB   mean=%.2e', mean(l2_err)));
+    grid on;
+    savefig(fig6, 'l2error'); close(fig6);
+end
 
 % -------------------------------------------------------------------------
 % Figure 7: mass conservation
 % -------------------------------------------------------------------------
-mass = squeeze(sum(sum(rho_num_cc, 2), 3)) * dx * dy;
+if want('mass_conservation', fig_names)
+    t_cc = ((1:nt)' - 0.5) * dt;
+    mass = squeeze(sum(sum(rho_num_cc, 2), 3)) * dx * dy;
 
-fig7 = figure('Name', 'Mass conservation', 'Position', [50 550 600 300]);
-plot(t_cc, mass, 'b-', 'LineWidth', 1.5);
-yline(mass(1), 'r--', sprintf('initial = %.4f', mass(1)));
-xlabel('t'); ylabel('\int\int \rho\, dx\, dy');
-title(sprintf('Mass conservation   drift = %.2e', max(mass) - min(mass)));
-grid on;
-savefig(fig7, 'mass_conservation'); close(fig7);
+    fig7 = figure('Name', 'Mass conservation', 'Position', [50 550 600 300]);
+    plot(t_cc, mass, 'b-', 'LineWidth', 1.5);
+    yline(mass(1), 'r--', sprintf('initial = %.4f', mass(1)));
+    xlabel('t'); ylabel('\int\int \rho\, dx\, dy');
+    title(sprintf('Mass conservation   drift = %.2e', max(mass) - min(mass)));
+    grid on;
+    savefig(fig7, 'mass_conservation'); close(fig7);
+end
 
 % -------------------------------------------------------------------------
 % Figures 8-11: Sinkhorn-Neumann comparison (only when available)
@@ -257,72 +286,88 @@ savefig(fig7, 'mass_conservation'); close(fig7);
 if has_sink
     clim_max_sink = max(max(rho_sink_cc(:)), max(rho_num_cc(:)));
 
-    fig8 = figure('Name', 'LADMM vs Sinkhorn', 'Position', [50 50 1200 500]);
-    for p = 1:n_snap
-        k = k_snap(p);
-        subplot(2, n_snap, p);
-        imagesc(xx, yy, squeeze(rho_sink_cc(k,:,:))');
-        axis xy; colorbar; clim([0 clim_max_sink]);
-        title(sprintf('Sinkhorn  t=%.2f', (k-0.5)*dt));
-        xlabel('x'); ylabel('y');
-        subplot(2, n_snap, n_snap + p);
-        imagesc(xx, yy, squeeze(rho_num_cc(k,:,:))');
-        axis xy; colorbar; clim([0 clim_max_sink]);
-        title(sprintf('LADMM  t=%.2f', (k-0.5)*dt));
-        xlabel('x'); ylabel('y');
+    if want('density_vs_sinkhorn', fig_names)
+        fig8 = figure('Name', 'LADMM vs Sinkhorn', 'Position', [50 50 1200 500]);
+        for p = 1:n_snap
+            k = k_snap(p);
+            subplot(2, n_snap, p);
+            imagesc(xx, yy, squeeze(rho_sink_cc(k,:,:))');
+            axis xy; colorbar; clim([0 clim_max_sink]);
+            title(sprintf('Sinkhorn  t=%.2f', (k-0.5)*dt));
+            xlabel('x'); ylabel('y');
+            subplot(2, n_snap, n_snap + p);
+            imagesc(xx, yy, squeeze(rho_num_cc(k,:,:))');
+            axis xy; colorbar; clim([0 clim_max_sink]);
+            title(sprintf('LADMM  t=%.2f', (k-0.5)*dt));
+            xlabel('x'); ylabel('y');
+        end
+        sgtitle(sprintf('Density: LADMM vs Sinkhorn-Neumann   eps=%.4g  proj=%s', cfg.vareps, proj_label));
+        savefig(fig8, 'density_vs_sinkhorn'); close(fig8);
     end
-    sgtitle(sprintf('Density: LADMM vs Sinkhorn-Neumann   eps=%.4g  proj=%s', cfg.vareps, proj_label));
-    savefig(fig8, 'density_vs_sinkhorn'); close(fig8);
 
-    [~, iy] = min(abs(yy - 0.5));
-    fig9 = figure('Name', 'x-slice vs Sinkhorn', 'Position', [50 600 700 400]);
-    hold on;
-    leg9 = gobjects(n_snap, 2);
-    for p = 1:n_snap
-        k = k_snap(p);
-        leg9(p,1) = plot(xx, rho_sink_cc(k,:,iy), '-',  'Color', colors(p,:), 'LineWidth', 1.5);
-        leg9(p,2) = plot(xx, rho_num_cc(k,:,iy),  'o--','Color', colors(p,:), 'MarkerSize', 4);
-    end
-    leg9_str = cell(n_snap, 2);
-    for p = 1:n_snap
-        k = k_snap(p);
-        leg9_str{p,1} = sprintf('Sinkhorn t=%.2f', (k-0.5)*dt);
-        leg9_str{p,2} = sprintf('LADMM    t=%.2f', (k-0.5)*dt);
-    end
-    legend(leg9(:), leg9_str(:), 'Location', 'best', 'FontSize', 7);
-    xlabel('x'); ylabel('\rho(t,x,y=0.5)');
-    title(sprintf('x-slice at y=0.5: LADMM vs Sinkhorn-Neumann   eps=%.4g', cfg.vareps));
-    grid on;
-    savefig(fig9, 'xslice_vs_sinkhorn'); close(fig9);
-
-    l2_sink = sqrt(dx * dy * sum(sum((rho_num_cc - rho_sink_cc).^2, 2), 3));
-    fig10 = figure('Name', 'L2 error vs Sinkhorn', 'Position', [700 550 600 300]);
-    plot(t_cc, l2_sink, 'r-', 'LineWidth', 1.5);
-    if ~isempty(rho_ana_cc)
+    if want('xslice_vs_sinkhorn', fig_names)
+        [~, iy] = min(abs(yy - 0.5));
+        fig9 = figure('Name', 'x-slice vs Sinkhorn', 'Position', [50 600 700 400]);
         hold on;
-        l2_ana = sqrt(dx * dy * sum(sum((rho_num_cc - rho_ana_cc).^2, 2), 3));
-        plot(t_cc, l2_ana, 'b--', 'LineWidth', 1.5);
-        legend('vs Sinkhorn-Neumann', 'vs Analytical', 'Location', 'best');
+        leg9 = gobjects(n_snap, 2);
+        for p = 1:n_snap
+            k = k_snap(p);
+            leg9(p,1) = plot(xx, rho_sink_cc(k,:,iy), '-',  'Color', colors(p,:), 'LineWidth', 1.5);
+            leg9(p,2) = plot(xx, rho_num_cc(k,:,iy),  'o--','Color', colors(p,:), 'MarkerSize', 4);
+        end
+        leg9_str = cell(n_snap, 2);
+        for p = 1:n_snap
+            k = k_snap(p);
+            leg9_str{p,1} = sprintf('Sinkhorn t=%.2f', (k-0.5)*dt);
+            leg9_str{p,2} = sprintf('LADMM    t=%.2f', (k-0.5)*dt);
+        end
+        legend(leg9(:), leg9_str(:), 'Location', 'best', 'FontSize', 7);
+        xlabel('x'); ylabel('\rho(t,x,y=0.5)');
+        title(sprintf('x-slice at y=0.5: LADMM vs Sinkhorn-Neumann   eps=%.4g', cfg.vareps));
+        grid on;
+        savefig(fig9, 'xslice_vs_sinkhorn'); close(fig9);
     end
-    xlabel('t'); ylabel('||\rho_{LADMM} - \rho_{ref}||_{L^2(x,y)}');
-    title(sprintf('L^2 error vs reference   eps=%.4g   mean(vs sink)=%.2e', ...
-        cfg.vareps, mean(l2_sink)));
-    grid on;
-    savefig(fig10, 'l2error_vs_sinkhorn'); close(fig10);
 
-    mass_sink = squeeze(sum(sum(rho_sink_cc, 2), 3)) * dx * dy;
-    fig11 = figure('Name', 'Mass vs Sinkhorn', 'Position', [700 100 600 300]);
-    hold on;
-    plot(t_cc, mass,      'b-',  'LineWidth', 1.5, 'DisplayName', 'LADMM');
-    plot(t_cc, mass_sink, 'r--', 'LineWidth', 1.5, 'DisplayName', 'Sinkhorn-Neumann');
-    xlabel('t'); ylabel('\int\int \rho\, dx\, dy');
-    title(sprintf('Mass conservation comparison   eps=%.4g', cfg.vareps));
-    legend('Location', 'best');
-    grid on;
-    savefig(fig11, 'mass_vs_sinkhorn'); close(fig11);
+    if want('l2error_vs_sinkhorn', fig_names)
+        t_cc   = ((1:nt)' - 0.5) * dt;
+        l2_sink = sqrt(dx * dy * sum(sum((rho_num_cc - rho_sink_cc).^2, 2), 3));
+        fig10 = figure('Name', 'L2 error vs Sinkhorn', 'Position', [700 550 600 300]);
+        plot(t_cc, l2_sink, 'r-', 'LineWidth', 1.5);
+        if ~isempty(rho_ana_cc)
+            hold on;
+            l2_ana = sqrt(dx * dy * sum(sum((rho_num_cc - rho_ana_cc).^2, 2), 3));
+            plot(t_cc, l2_ana, 'b--', 'LineWidth', 1.5);
+            legend('vs Sinkhorn-Neumann', 'vs Analytical', 'Location', 'best');
+        end
+        xlabel('t'); ylabel('||\rho_{LADMM} - \rho_{ref}||_{L^2(x,y)}');
+        title(sprintf('L^2 error vs reference   eps=%.4g   mean(vs sink)=%.2e', ...
+            cfg.vareps, mean(l2_sink)));
+        grid on;
+        savefig(fig10, 'l2error_vs_sinkhorn'); close(fig10);
+    end
 
-    fprintf('  Sinkhorn comparison figures saved (8-11).\n');
+    if want('mass_vs_sinkhorn', fig_names)
+        t_cc      = ((1:nt)' - 0.5) * dt;
+        mass      = squeeze(sum(sum(rho_num_cc,  2), 3)) * dx * dy;
+        mass_sink = squeeze(sum(sum(rho_sink_cc, 2), 3)) * dx * dy;
+        fig11 = figure('Name', 'Mass vs Sinkhorn', 'Position', [700 100 600 300]);
+        hold on;
+        plot(t_cc, mass,      'b-',  'LineWidth', 1.5, 'DisplayName', 'LADMM');
+        plot(t_cc, mass_sink, 'r--', 'LineWidth', 1.5, 'DisplayName', 'Sinkhorn-Neumann');
+        xlabel('t'); ylabel('\int\int \rho\, dx\, dy');
+        title(sprintf('Mass conservation comparison   eps=%.4g', cfg.vareps));
+        legend('Location', 'best');
+        grid on;
+        savefig(fig11, 'mass_vs_sinkhorn'); close(fig11);
+    end
+
+    fprintf('  Sinkhorn comparison figures saved.\n');
 end
 
 fprintf('  Figures saved to %s\n', fig_dir);
+end
+
+% -------------------------------------------------------------------------
+function tf = want(name, fig_names)
+    tf = isempty(fig_names) || any(strcmp(name, fig_names));
 end
