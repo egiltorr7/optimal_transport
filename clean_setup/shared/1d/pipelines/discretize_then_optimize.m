@@ -48,6 +48,14 @@ function result = discretize_then_optimize(cfg, problem)
     rho1 = problem.rho1;
     ops  = problem.ops;
 
+    % --- GPU device selection (must happen before any gpuArray allocation) ---
+    use_gpu = isfield(cfg, 'use_gpu') && cfg.use_gpu;
+    if use_gpu
+        gpu_id = 1;
+        if isfield(cfg, 'gpu_device'), gpu_id = cfg.gpu_device; end
+        gpuDevice(gpu_id);
+    end
+
     % Precompute FP projection factors (scheme-dependent)
     if isequal(cfg.projection, @proj_fokker_planck_banded)
         problem.banded_proj = precomp_banded_proj(problem, cfg.vareps);
@@ -75,8 +83,7 @@ function result = discretize_then_optimize(cfg, problem)
     % b = 0 on cell-centre grid (BCs absorbed into affine A_fn)
     b = s_zeros(y0);
 
-    % --- GPU data transfer (if requested) ---
-    use_gpu = isfield(cfg, 'use_gpu') && cfg.use_gpu;
+    % --- GPU data transfer ---
     if use_gpu
         rho0     = gpuArray(rho0);
         rho1     = gpuArray(rho1);
