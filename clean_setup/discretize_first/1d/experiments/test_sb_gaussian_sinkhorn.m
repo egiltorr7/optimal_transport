@@ -13,12 +13,14 @@ fig_dir = fullfile(fileparts(mfilename('fullpath')), '..', 'results', 'figures')
 if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 
 %% --- Shared config ---
+% cfg_admm       = cfg_ladmm_gaussian();
 cfg_admm       = cfg_ladmm_gaussian();
 cfg_admm.vareps = 1.0;   % set ε explicitly (must match between both solvers)
 
-cfg_sink.vareps   = cfg_admm.vareps;
-cfg_sink.max_iter = 500;
-cfg_sink.tol      = 1e-10;
+cfg_sink.vareps       = cfg_admm.vareps;
+cfg_sink.max_iter     = 500;
+cfg_sink.tol          = 1e-10;
+cfg_sink.precomp_heat = @precomp_heat_neumann;
 
 prob_def = prob_gaussian();
 problem  = setup_problem(cfg_admm, prob_def);
@@ -151,6 +153,51 @@ title(sprintf('ADMM residual   iters=%d,  converged=%d', ...
     res_admm.iters, res_admm.converged));
 grid on;
 saveas(gcf, fullfile(fig_dir, sprintf('sinkhorn_admm_residual_%s.png', ftag)));
+
+%% --- Figure 5: ADMM vs Sinkhorn (density evolution + L2 error) ---
+% Both res_admm.rho_stag (ntm x nx) and res_sink.rho(2:nt,:) are on the
+% same staggered time grid t = dt, 2dt, ..., (nt-1)*dt.
+ntm        = nt - 1;
+t_stag_vec = (1:ntm)' * dt;   % (ntm x 1)
+
+rho_stag_sink = res_sink.rho(2:nt, :);   % (ntm x nx)
+diff_rho      = res_admm.rho_stag - rho_stag_sink;
+err_vs_sink   = sqrt(dx * sum(diff_rho.^2, 2));   % (ntm x 1)
+
+figure('Name', sprintf('ADMM vs Sinkhorn  eps=%.4g', vareps), ...
+    'Position', [100 100 1000 380]);
+tiledlayout(1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+
+% Left panel: density evolution
+nexttile;
+hold on;
+stride = max(1, floor(nx / 60));
+for p = 1:n_t
+    k   = max(1, min(ntm, round(t_fracs(p) * nt)));
+    idx = 1:stride:nx;
+    plot(xx, rho_stag_sink(k,:), '-',  'Color', colors(p,:), 'LineWidth', 1.5, ...
+        'HandleVisibility', 'off');
+    plot(xx(idx), res_admm.rho_stag(k,idx), 'o', 'Color', colors(p,:), ...
+        'MarkerSize', 4, 'MarkerFaceColor', 'none', 'HandleVisibility', 'off');
+end
+h_ref = plot(nan, nan, 'k-',  'LineWidth', 1.5,  'DisplayName', 'Sinkhorn');
+h_num = plot(nan, nan, 'ko',  'MarkerSize', 4,   'DisplayName', 'LADMM', ...
+    'MarkerFaceColor', 'none');
+xlabel('$x$', 'Interpreter', 'latex');
+ylabel('$\rho$', 'Interpreter', 'latex');
+title(sprintf('Density evolution  ($\\varepsilon$=%.4g)', vareps), 'Interpreter', 'latex');
+legend([h_ref, h_num], 'Location', 'best');
+grid on;
+
+% Right panel: L2 error over time
+nexttile;
+semilogy(t_stag_vec, err_vs_sink, 'b-', 'LineWidth', 1.5);
+xlabel('$t$', 'Interpreter', 'latex');
+ylabel('$\|\rho_\mathrm{LADMM} - \rho_\mathrm{Sink}\|_{L^2(x)}$', 'Interpreter', 'latex');
+title('$L^2$ error: LADMM vs Sinkhorn', 'Interpreter', 'latex');
+grid on;
+
+saveas(gcf, fullfile(fig_dir, sprintf('sinkhorn_vs_admm_%s.png', ftag)));
 
 %% --- Summary ---
 fprintf('\n--- Summary (eps=%.4g, nt=%d, nx=%d) ---\n', vareps, nt, nx);

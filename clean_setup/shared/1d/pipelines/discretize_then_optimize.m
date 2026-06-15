@@ -48,9 +48,17 @@ function result = discretize_then_optimize(cfg, problem)
     rho1 = problem.rho1;
     ops  = problem.ops;
 
-    % Precompute banded FP projection factors
+    % Precompute FP projection factors (scheme-dependent)
     if isequal(cfg.projection, @proj_fokker_planck_banded)
         problem.banded_proj = precomp_banded_proj(problem, cfg.vareps);
+    elseif isequal(cfg.projection, @proj_fokker_planck_banded_gpu)
+        problem.banded_proj = precomp_banded_proj_gpu(problem, cfg.vareps);
+    elseif isequal(cfg.projection, @proj_fokker_planck_imex)
+        problem.imex_proj = precomp_imex_proj(problem, cfg.vareps);
+    elseif isequal(cfg.projection, @proj_fokker_planck_expsemi)
+        problem.expsemi_proj = precomp_expsemi_proj(problem, cfg.vareps);
+    elseif isequal(cfg.projection, @proj_fokker_planck_expsemi_gpu)
+        problem.expsemi_proj = precomp_expsemi_proj_gpu(problem, cfg.vareps);
     end
 
     % --- Initial guesses ---
@@ -67,10 +75,26 @@ function result = discretize_then_optimize(cfg, problem)
     % b = 0 on cell-centre grid (BCs absorbed into affine A_fn)
     b = s_zeros(y0);
 
+    % --- GPU data transfer (if requested) ---
+    use_gpu = isfield(cfg, 'use_gpu') && cfg.use_gpu;
+    if use_gpu
+        rho0     = gpuArray(rho0);
+        rho1     = gpuArray(rho1);
+        x0.rho   = gpuArray(x0.rho);
+        x0.mx    = gpuArray(x0.mx);
+        y0.rho   = gpuArray(y0.rho);
+        y0.mx    = gpuArray(y0.mx);
+        b.rho    = gpuArray(b.rho);
+        b.mx     = gpuArray(b.mx);
+    end
+
     % --- Operators ---
     gamma     = cfg.gamma;
     sigma     = 1 / gamma;
     zeros_nt  = zeros(nt, 1);
+    if use_gpu
+        zeros_nt = gpuArray(zeros_nt);
+    end
 
     % A: affine interpolation staggered -> cell-centres (BCs baked in)
     A_fn  = @(x) struct('rho', ops.interp_t_at_phi(x.rho, rho0, rho1), ...
@@ -90,7 +114,12 @@ function result = discretize_then_optimize(cfg, problem)
         s_sub(z_hat, s_scale(sigma, delta)), sigma, problem);
 
     % Weighted L2 norm on cell-centre grid for convergence
-    norm_fn = @(v) sqrt(dt * dx * (sum(v.rho(:).^2) + sum(v.mx(:).^2)));
+    % gather() ensures a CPU scalar is returned even on the GPU path
+    if use_gpu
+        norm_fn = @(v) gather(sqrt(dt * dx * (sum(v.rho(:).^2) + sum(v.mx(:).^2))));
+    else
+        norm_fn = @(v) sqrt(dt * dx * (sum(v.rho(:).^2) + sum(v.mx(:).^2)));
+    end
 
     % --- ADMM options ---
     admm_opts.gamma    = gamma;
@@ -104,10 +133,17 @@ function result = discretize_then_optimize(cfg, problem)
     [x, y, ~, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, b, x0, y0, admm_opts); 
 
     % Return both grids: x on staggered (FP-feasible), y on cell-centres (KE-optimal)
-    result.rho_stag  = x.rho;
-    result.mx_stag   = x.mx;
-    result.rho_cc    = y.rho;
-    result.mx_cc     = y.mx;
+    if use_gpu
+        result.rho_stag  = gather(x.rho);
+        result.mx_stag   = gather(x.mx);
+        result.rho_cc    = gather(y.rho);
+        result.mx_cc     = gather(y.mx);
+    else
+        result.rho_stag  = x.rho;
+        result.mx_stag   = x.mx;
+        result.rho_cc    = y.rho;
+        result.mx_cc     = y.mx;
+    end
     result.residual  = info.residual;
     result.iters     = info.iters;
     result.converged = info.converged;

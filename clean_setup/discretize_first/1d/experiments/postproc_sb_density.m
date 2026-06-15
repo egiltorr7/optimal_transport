@@ -25,7 +25,7 @@ set(groot, 'defaultColorbarTickLabelInterpreter', 'latex');
 %% Parameters
 %% -----------------------------------------------------------------------
 NT = 256;   NX = 256;
-eps_vals = [0, 1e-2, 0.1, 1];
+eps_vals = [1e-2, 0.1, 1, 4];
 t_show   = [0.10, 0.25, 0.50, 0.75, 0.90];
 
 ne    = numel(eps_vals);
@@ -34,10 +34,10 @@ nshow = numel(t_show);
 cfg_base          = cfg_ladmm_gaussian();
 cfg_base.nt       = NT;
 cfg_base.nx       = NX;
-cfg_base.max_iter = 20000;
-cfg_base.tol      = 1e-8;
-cfg_base.gamma = 10;
-cfg_base.tau   = 11;
+cfg_base.max_iter = 10000;
+cfg_base.tol      = 1e-10;
+cfg_base.gamma = 100;
+cfg_base.tau   = 101;
 
 prob_def = prob_gaussian();
 out_dir  = fullfile(fileparts(mfilename('fullpath')), '..', 'results', 'paper');

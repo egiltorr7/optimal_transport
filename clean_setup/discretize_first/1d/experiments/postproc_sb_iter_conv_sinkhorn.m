@@ -27,15 +27,16 @@ set(groot, 'defaultColorbarTickLabelInterpreter', 'latex');
 %% -----------------------------------------------------------------------
 %% Parameters
 %% -----------------------------------------------------------------------
-NT = 128;   NX = 128;
-eps_vals = [1e-2, 1e-1, 1];
+NT = 512;   NX = 128;
+% eps_vals = [5e-3 1e-2, 1e-1, 1];
+eps_vals = [1];
 
 cfg_base          = cfg_ladmm_gaussian();
 cfg_base.vareps   = 0;      % overridden per run
 cfg_base.nt       = NT;
 cfg_base.nx       = NX;
-cfg_base.gamma    = 10;
-cfg_base.tau      = 101;
+cfg_base.gamma    = 100;
+cfg_base.tau      = 110;
 cfg_base.max_iter = 10000;
 cfg_base.tol      = 1e-10;
 
@@ -64,8 +65,8 @@ for i = 1:ne
     % --- Sinkhorn reference (tight tolerance, Neumann BCs) ---
     fprintf('eps=%-6g  Sinkhorn ... ', eps_vals(i));
     cfg_sink.vareps       = eps_vals(i);
-    cfg_sink.max_iter     = 2000;
-    cfg_sink.tol          = 1e-12;
+    cfg_sink.max_iter     = 500;
+    cfg_sink.tol          = -1;
     cfg_sink.precomp_heat = @precomp_heat_neumann;
     res_sink = sinkhorn_hopf_cole(prob, cfg_sink);
     fprintf('iters=%d  err=%.2e\n', res_sink.iters, res_sink.error);

@@ -18,14 +18,14 @@ set(groot, 'defaultColorbarTickLabelInterpreter', 'latex');
 %% Parameters
 %% -----------------------------------------------------------------------
 NT = 256;   NX = 256;
-eps_vals = [1e-10, 1e-4, 1e-3, 1e-2];
+eps_vals = [0 1e-10, 1e-4, 1e-3, 1e-2];
 
 cfg_base          = cfg_ladmm_gaussian();
 cfg_base.vareps   = 0;      % overridden per run
 cfg_base.nt       = NT;
 cfg_base.nx       = NX;
-cfg_base.gamma    = 10;
-cfg_base.tau      = 11;
+cfg_base.gamma    = 100;
+cfg_base.tau      = 101;
 cfg_base.max_iter = 20000;
 cfg_base.tol      = 1e-10;
 
@@ -109,7 +109,7 @@ fig = figure('Units','centimeters','Position',[2, 2, FW, FH], ...
              'PaperUnits','centimeters','PaperSize',[FW, FH]);
 hold on;
 
-for i = 1:ne
+for i = 2:ne
     plot(1:numel(iter_errs{i}), iter_errs{i}, ...
         'Color', cmap(i,:), 'LineWidth', LW_D);
 end
@@ -121,6 +121,7 @@ grid on;
 
 leg_str = arrayfun(@(e) sprintf('$\\varepsilon = 10^{%d}$', round(log10(e))), ...
     eps_vals, 'UniformOutput', false);
+leg_str = leg_str(2:end);
 legend(leg_str, 'Location','northeast', 'FontSize',FS, 'Box','off');
 
 save_fig(fig, fullfile(out_dir, ...
