@@ -10,4 +10,5 @@ function cfg = cfg_ladmm_gaussian_gpu()
     cfg.disc       = @disc_staggered_1st_gpu;
     cfg.projection = @proj_fokker_planck_banded_gpu;
     cfg.use_gpu    = true;
+    cfg.gpu_device = 1;    % device index (1-based); override in script if needed
 end
