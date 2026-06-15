@@ -27,9 +27,10 @@ set(groot, 'defaultLegendInterpreter',        'latex');
 VAREPS   = 1.0;
 prob_def = prob_gaussian();
 
-cfg_base          = cfg_ladmm_gaussian_gpu();
+cfg_base            = cfg_ladmm_gaussian_gpu();
 cfg_base.gpu_device = 3;   % whichever GPU is free
-cfg_base.vareps   = VAREPS;
+cfg_base.vareps     = VAREPS;
+gpuDevice(cfg_base.gpu_device);   % select once before any GPU allocation
 
 cfg_sink_tmpl.vareps       = VAREPS;
 cfg_sink_tmpl.max_iter     = 50;

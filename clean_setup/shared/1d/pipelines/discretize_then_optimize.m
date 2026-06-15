@@ -48,12 +48,14 @@ function result = discretize_then_optimize(cfg, problem)
     rho1 = problem.rho1;
     ops  = problem.ops;
 
-    % --- GPU device selection (must happen before any gpuArray allocation) ---
+    % --- GPU device selection (only resets if switching to a different device) ---
     use_gpu = isfield(cfg, 'use_gpu') && cfg.use_gpu;
     if use_gpu
         gpu_id = 1;
         if isfield(cfg, 'gpu_device'), gpu_id = cfg.gpu_device; end
-        gpuDevice(gpu_id);
+        if gpuDevice().Index ~= gpu_id
+            gpuDevice(gpu_id);
+        end
     end
 
     % Precompute FP projection factors (scheme-dependent)
