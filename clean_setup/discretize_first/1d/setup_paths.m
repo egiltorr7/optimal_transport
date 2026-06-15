@@ -12,6 +12,7 @@ addpath(fullfile(sh_base, 'utils'));
 % Shared (1D-specific)
 addpath(sh1d);                                   % setup_problem
 addpath(fullfile(sh1d, 'utils'));                 % admm_solve, ladmm_solve, s_*, precomp_banded_proj, ...
+addpath(fullfile(sh1d, 'gpu'));                   % dct_rows, idct_rows, thomas_batch_*
 addpath(fullfile(sh1d, 'problems'));              % prob_*, analytical_*
 addpath(fullfile(sh1d, 'discretization'));        % disc_staggered_1st
 addpath(fullfile(sh1d, 'prox'));                  % prox_ke_exact
