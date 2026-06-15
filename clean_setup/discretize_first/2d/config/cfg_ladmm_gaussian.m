@@ -24,7 +24,7 @@ function cfg = cfg_ladmm_gaussian()
     cfg.tol      = 1e-8;
 
     % GPU options (comment out or set use_gpu=false to run on CPU)
-    % cfg.use_gpu    = true;
-    % cfg.gpu_device = 1;    % device index (1-based); check with gpuDeviceCount / gpuDeviceTable
+    cfg.use_gpu    = true;
+    cfg.gpu_device = 1;    % device index (1-based); check with gpuDeviceCount / gpuDeviceTable
 
 end

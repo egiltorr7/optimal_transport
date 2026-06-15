@@ -12,7 +12,7 @@ set -e
 # --- Edit these to match your setup ---
 MATLAB_BIN="matlab"
 GPU_DEVICE=1          # 1-based GPU index; check with gpuDeviceTable in MATLAB
-PROJ="proj_fokker_planck_spike2"
+PROJ="proj_fokker_planck_banded"
 # --------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -47,12 +47,11 @@ GRIDS=(
 
 STEPS=(
 #  gamma   c
-   "0.01   1.1"
-   "0.05   1.1"
-   "0.1    1.1"
-   "0.5    1.1"
-   "1.0    1.1"
-)
+   "0.1   1.05"
+   "1.0   1.05"
+   "10    1.05"
+   "30    1.05"
+   )
 # =============================================================================
 
 mkdir -p "${RES_DIR}/figures"

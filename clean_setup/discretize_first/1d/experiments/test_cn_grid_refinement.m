@@ -15,6 +15,8 @@
 clear; close all;
 run(fullfile(fileparts(mfilename('fullpath')), '..', 'setup_paths.m'));
 
+
+
 fig_dir = fullfile(fileparts(mfilename('fullpath')), '..', 'results', 'figures');
 if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 
@@ -26,11 +28,12 @@ VAREPS   = 1.0;
 prob_def = prob_gaussian();
 
 cfg_base          = cfg_ladmm_gaussian_gpu();
+cfg_base.gpu_device = 3;   % whichever GPU is free
 cfg_base.vareps   = VAREPS;
 
 cfg_sink_tmpl.vareps       = VAREPS;
-cfg_sink_tmpl.max_iter     = 500;
-cfg_sink_tmpl.tol          = 1e-10;
+cfg_sink_tmpl.max_iter     = 50;
+cfg_sink_tmpl.tol          = -1;
 cfg_sink_tmpl.precomp_heat = @precomp_heat_neumann;
 
 FS = 11;  LW = 1.5;
