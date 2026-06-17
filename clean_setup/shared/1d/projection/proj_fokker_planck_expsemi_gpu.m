@@ -7,54 +7,56 @@ function x_out = proj_fokker_planck_expsemi_gpu(x_in, problem, cfg)
 %
 %   Requires problem.expsemi_proj set by precomp_expsemi_proj_gpu.
 
-    ops    = problem.ops;
-    rho0   = problem.rho0;    % (1 x nx) gpuArray
-    rho1   = problem.rho1;    % (1 x nx) gpuArray
-    nt     = problem.nt;
-    ntm    = nt - 1;
-    dt     = problem.dt;
-    ep     = problem.expsemi_proj;
-    c_vals = ep.c_vals;       % (1 x nx) gpuArray
+    ops      = problem.ops;
+    rho0     = problem.rho0;    % (1 x nx) gpuArray
+    rho1     = problem.rho1;    % (1 x nx) gpuArray
+    nt       = problem.nt;
+    ntm      = nt - 1;
+    dt       = problem.dt;
+    ep       = problem.expsemi_proj;
+    c_vals   = ep.c_vals;    % (1 x nx) gpuArray: exp(-alpha_k)
+    phi_vals = ep.phi_vals;  % (1 x nx) gpuArray: (1-c_k)/alpha_k
 
     mu  = x_in.rho;   % (ntm x nx) gpuArray
     psi = x_in.mx;    % (nt  x nxm) gpuArray
 
     zeros_x = zeros(nt, 1, 'like', mu);
 
-    %% FP residual f = (mu_curr - S*mu_prev)/dt + D_x psi
-    mu_prev = [rho0; mu];     % (nt x nx)
-    mu_curr = [mu;   rho1];   % (nt x nx)
-    S_prev  = apply_semigroup(mu_prev, c_vals);
+    %% ETD FP residual in DCT space
+    mu_prev   = [rho0; mu];
+    mu_curr   = [mu;   rho1];
+    S_prev    = apply_semigroup(mu_prev, c_vals);
+    f_rho_hat = dct_rows((mu_curr - S_prev) / dt);          % (nt x nx)
 
-    f = (mu_curr - S_prev) / dt + ops.deriv_x_at_phi(psi, zeros_x, zeros_x);
+    Dxm_hat   = dct_rows(ops.deriv_x_at_phi(psi, zeros_x, zeros_x));  % (nt x nx)
 
-    % No early-exit check here: a gather() would force GPU->CPU sync every iteration.
-    % Zero f flows through to zero phi and zero corrections, so the result is correct.
+    f_hat = f_rho_hat + phi_vals .* Dxm_hat;
 
-    %% DCT in x
-    f_hat   = dct_rows(f);                            % (nt x nx)
+    % No early-exit check: gather() would force GPU->CPU sync every iteration.
+
+    %% Solve T_k phi_k = f_hat(:,k)
     phi_hat = zeros(nt, problem.nx, 'like', mu);
 
-    % j=1 (DC mode, lambda_x=0, c=1): singular T_1, invert via DCT-in-t
-    f1_row    = dct_rows(f_hat(:,1)');                % (1 x nt)
+    % k=1 (DC mode, lambda_x=0, c=1, phi=1): singular T_1, invert via DCT-in-t
+    f1_row    = dct_rows(f_hat(:,1)');
     phi1_row  = zeros(1, nt, 'like', mu);
     phi1_row(2:end) = f1_row(2:end) ./ ep.lambda_t(2:end)';
-    phi_hat(:,1) = idct_rows(phi1_row)';              % (nt x 1)
+    phi_hat(:,1) = idct_rows(phi1_row)';
 
-    % j=2..nx: batched Thomas solve
+    % k=2..nx: batched Thomas solve
     phi_hat(:, 2:end) = thomas_batch_solve(ep.D_mod, ep.e_vals, f_hat(:, 2:end));
 
-    %% IDCT in x -> phi in physical space
-    phi = idct_rows(phi_hat);                         % (nt x nx)
-
-    %% Adjoint correction in DCT space
-    phi_hat_curr = phi_hat(1:ntm, :);                 % (ntm x nx)
-    phi_hat_next = phi_hat(2:nt,  :);                 % (ntm x nx)
+    %% rho update
+    phi_hat_curr = phi_hat(1:ntm, :);
+    phi_hat_next = phi_hat(2:nt,  :);
     adj_rho_hat  = (c_vals .* phi_hat_next - phi_hat_curr) / dt;
-    adj_rho      = idct_rows(adj_rho_hat);            % (ntm x nx)
+    adj_rho      = idct_rows(adj_rho_hat);
 
-    x_out.rho = mu  + adj_rho;
-    x_out.mx  = psi + ops.deriv_x_at_m(phi);
+    x_out.rho = mu + adj_rho;
+
+    %% m update: D_x^T (Phi_op * phi)
+    phi_weighted = idct_rows(phi_vals .* phi_hat);   % (nt x nx)
+    x_out.mx = psi + ops.deriv_x_at_m(phi_weighted);
 end
 
 function S_rho = apply_semigroup(rho, c_vals)

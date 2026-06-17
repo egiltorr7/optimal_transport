@@ -46,13 +46,14 @@ rho_ana_cc = ops.interp_t_at_phi(rho_ana_s, rho0, rho1);   % (nt x nx)
 rho_num_cc = result.rho_cc;
 
 %% --- Figure 1: density evolution (all times in one plot) ---
-t_fracs = [0.1, 0.25, 0.5, 0.75, 0.9];
+n_plot  = 7;
+t_fracs = (1 - cos(pi * (0:n_plot-1) / (n_plot-1))) / 2;   % cosine-clustered near t=0,1
 nt      = problem.nt;
 nx      = problem.nx;
 xx      = problem.xx;
 dt      = problem.dt;
 
-n_t    = numel(t_fracs);
+n_t    = n_plot;
 colors = parula(n_t);   % one colour per time snapshot
 
 figure('Name', sprintf('SB Gaussian density  gamma=%.4g tau=%.4g eps=%.4g', ...

@@ -27,7 +27,7 @@ set(groot, 'defaultColorbarTickLabelInterpreter', 'latex');
 %% -----------------------------------------------------------------------
 %% Parameters
 %% -----------------------------------------------------------------------
-NT = 512;   NX = 128;
+NT = 256;   NX = 128;
 % eps_vals = [5e-3 1e-2, 1e-1, 1];
 eps_vals = [1];
 
@@ -102,6 +102,7 @@ for i = 1:ne
                'mx',  z_hat.mx  - sigma*delta.mx), sigma, prob);
 
     norm_fn = @(v) sqrt(dt * dx * (sum(v.rho(:).^2) + sum(v.mx(:).^2)));
+    
 
     admm_opts.gamma    = cfg.gamma;
     admm_opts.tau      = cfg.tau;
@@ -109,10 +110,12 @@ for i = 1:ne
     admm_opts.max_iter = cfg.max_iter;
     admm_opts.tol      = cfg.tol;
     admm_opts.norm_fn  = norm_fn;
-
+    % 
+    % iter_fn = @(x, k) sqrt(dt * dx * ( ...
+    %     norm(x.rho(:) - rho_ref(:))^2 + ...
+    %     norm(x.mx(:)  - mx_ref(:))^2));
     iter_fn = @(x, k) sqrt(dt * dx * ( ...
-        norm(x.rho(:) - rho_ref(:))^2 + ...
-        norm(x.mx(:)  - mx_ref(:))^2));
+        norm(x.rho(:) - rho_ref(:))^2));
 
     fprintf('         ADMM  ... ');
     [~, ~, ~, info] = ladmm_solve_monitored( ...

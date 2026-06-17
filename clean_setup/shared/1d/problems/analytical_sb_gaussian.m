@@ -24,7 +24,9 @@ function [rho_ana, mx_ana] = analytical_sb_gaussian(problem, vareps)
 %     rho_ana  (ntm x nx)   density   at times k*dt,        positions (i-0.5)*dx
 %     mx_ana   (nt  x nxm)  momentum  at times (k-0.5)*dt,  positions j*dx
 
-    mu0 = 1/3;   mu1 = 2/3;   sigma = 0.05;
+    mu0   = get_field(problem, 'mu0',   1/3);
+    mu1   = get_field(problem, 'mu1',   2/3);
+    sigma = get_field(problem, 'sigma', 0.05);
 
     nt  = problem.nt;   ntm = nt - 1;   dt = problem.dt;
     nx  = problem.nx;   nxm = nx - 1;   dx = problem.dx;
@@ -65,4 +67,8 @@ function [rho_ana, mx_ana] = analytical_sb_gaussian(problem, vareps)
               * (x_mx - mu_t_mx(k));
         mx_ana(k, :) = row .* v_k;
     end
+end
+
+function v = get_field(s, f, default)
+    if isfield(s, f), v = s.(f); else, v = default; end
 end

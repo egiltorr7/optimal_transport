@@ -56,7 +56,7 @@ function x_out = proj_fokker_planck_banded(x_in, problem, cfg)
     phi1_t(2:end)     = f1_t(2:end) ./ problem.lambda_t(2:end);
     phi_hat(:, 1)     = idct(phi1_t);
 
-    % k=2..nx: SPD tridiagonal solve with precomputed LU
+    % k=2..nx: tridiagonal solve with precomputed LU
     for k = 2:problem.nx
         phi_hat(:, k) = bp.Tk_U{k} \ (bp.Tk_L{k} \ (bp.Tk_P{k} * f_hat(:, k)));
     end

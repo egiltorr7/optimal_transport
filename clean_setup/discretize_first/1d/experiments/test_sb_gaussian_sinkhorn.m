@@ -15,6 +15,9 @@ if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 %% --- Shared config ---
 % cfg_admm       = cfg_ladmm_gaussian();
 cfg_admm       = cfg_ladmm_gaussian();
+cfg_admm.nt = 512;
+cfg_admm.nx = 512;
+cfg_admm.max_iter = 5000;
 cfg_admm.vareps = 1.0;   % set ε explicitly (must match between both solvers)
 
 cfg_sink.vareps       = cfg_admm.vareps;
@@ -50,7 +53,7 @@ rho_ana_cc = ops.interp_t_at_phi(rho_ana_stag, problem.rho0, problem.rho1);   % 
 nt   = problem.nt;   dt = problem.dt;   nx = problem.nx;   dx = problem.dx;
 xx   = problem.xx;
 
-mu0 = 1/3;   mu1 = 2/3;   sigma = 0.05;
+mu0 = problem.mu0;   mu1 = problem.mu1;   sigma = problem.sigma;
 vareps = cfg_admm.vareps;
 alpha  = sqrt(sigma^4 + vareps^2) - sigma^2;
 Normal = @(x, mu, sig) exp(-0.5*((x-mu)/sig).^2) / (sqrt(2*pi)*sig);
@@ -66,44 +69,62 @@ for k = 1:(nt+1)
 end
 
 %% --- Figure 1: Density evolution comparison ---
-t_fracs = [0.1, 0.25, 0.5, 0.75, 0.9];
-n_t     = numel(t_fracs);
-colors  = parula(n_t);
+% Pick staggered time indices directly (no snapping): cosine-clustered near
+% k=1 and k=ntm, strictly interior.  Legend labels use the exact grid time.
+n_plot = 7;
+ntm_   = nt - 1;
+t_idx  = unique(round(1 + (ntm_-1)/2 * (1 - cos(pi*(1:n_plot)/(n_plot+1)))));
+n_t    = numel(t_idx);
+colors = parula(n_t);
 
 figure('Name', sprintf('SB Gaussian density  eps=%.4g', vareps), ...
     'Position', [50 50 900 420]);
 
 tiledlayout(1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 
-% Left panel: ADMM vs analytical
+stride = max(1, floor(nx / 60));
+
+% Left panel: ADMM vs analytical (cell-centre times t = (k-0.5)*dt)
 nexttile;
 hold on;
 for p = 1:n_t
-    k     = max(1, round(t_fracs(p) * nt));
-    t_val = (k - 0.5) * dt;
-    stride = max(1, floor(nx / 60));
-    idx    = 1:stride:nx;
-    plot(xx, rho_ana_cc(k,:), '-',  'Color', colors(p,:), 'LineWidth', 1.5);
+    k   = t_idx(p);
+    idx = 1:stride:nx;
+    plot(xx, rho_ana_cc(k,:), '-',  'Color', colors(p,:), 'LineWidth', 1.5, 'HandleVisibility', 'off');
     plot(xx(idx), res_admm.rho_cc(k,idx), 'o', 'Color', colors(p,:), ...
-        'MarkerSize', 4, 'MarkerFaceColor', colors(p,:));
+        'MarkerSize', 4, 'MarkerFaceColor', colors(p,:), 'HandleVisibility', 'off');
 end
+h_ana = plot(nan,nan, 'k-', 'LineWidth', 1.5, 'DisplayName', 'Analytical');
+h_adm = plot(nan,nan, 'ko', 'MarkerSize', 4,  'MarkerFaceColor', [.5 .5 .5], 'DisplayName', 'ADMM');
+h_t   = gobjects(n_t, 1);
+for p = 1:n_t
+    h_t(p) = plot(nan,nan, '-', 'Color', colors(p,:), 'LineWidth', 2, ...
+        'DisplayName', sprintf('$t=%.3f$', (t_idx(p)-0.5)*dt));
+end
+legend([h_ana; h_adm; h_t], 'Location', 'best', 'FontSize', 7, 'Interpreter', 'latex', 'Box', 'off');
 xlabel('$x$', 'Interpreter', 'latex');
 ylabel('$\rho$', 'Interpreter', 'latex');
 title(sprintf('ADMM  ($\\varepsilon$=%.4g)', vareps), 'Interpreter', 'latex');
 grid on;
 
-% Right panel: Sinkhorn vs analytical (at edge times closest to t_fracs)
+% Right panel: Sinkhorn vs analytical (edge times t = k*dt)
 nexttile;
 hold on;
 for p = 1:n_t
-    k     = max(1, round(t_fracs(p) * nt));
-    t_val = k * dt;
-    stride = max(1, floor(nx / 60));
-    idx    = 1:stride:nx;
-    plot(xx, rho_ana_edge(k+1,:), '-',  'Color', colors(p,:), 'LineWidth', 1.5);
+    k   = t_idx(p);
+    idx = 1:stride:nx;
+    plot(xx, rho_ana_edge(k+1,:), '-',  'Color', colors(p,:), 'LineWidth', 1.5, 'HandleVisibility', 'off');
     plot(xx(idx), res_sink.rho(k+1,idx), 'o', 'Color', colors(p,:), ...
-        'MarkerSize', 4, 'MarkerFaceColor', colors(p,:));
+        'MarkerSize', 4, 'MarkerFaceColor', colors(p,:), 'HandleVisibility', 'off');
 end
+h_ana2 = plot(nan,nan, 'k-', 'LineWidth', 1.5, 'DisplayName', 'Analytical');
+h_sk   = plot(nan,nan, 'ko', 'MarkerSize', 4,  'MarkerFaceColor', [.5 .5 .5], 'DisplayName', 'Sinkhorn');
+h_t2   = gobjects(n_t, 1);
+for p = 1:n_t
+    h_t2(p) = plot(nan,nan, '-', 'Color', colors(p,:), 'LineWidth', 2, ...
+        'DisplayName', sprintf('$t=%.3f$', t_idx(p)*dt));
+end
+legend([h_ana2; h_sk; h_t2], 'Location', 'best', 'FontSize', 7, 'Interpreter', 'latex', 'Box', 'off');
 xlabel('$x$', 'Interpreter', 'latex');
 ylabel('$\rho$', 'Interpreter', 'latex');
 title(sprintf('Sinkhorn-HC  ($\\varepsilon$=%.4g)', vareps), 'Interpreter', 'latex');
@@ -168,25 +189,28 @@ figure('Name', sprintf('ADMM vs Sinkhorn  eps=%.4g', vareps), ...
     'Position', [100 100 1000 380]);
 tiledlayout(1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 
-% Left panel: density evolution
+% Left panel: density evolution (staggered times t = k*dt)
 nexttile;
 hold on;
-stride = max(1, floor(nx / 60));
 for p = 1:n_t
-    k   = max(1, min(ntm, round(t_fracs(p) * nt)));
+    k   = t_idx(p);
     idx = 1:stride:nx;
     plot(xx, rho_stag_sink(k,:), '-',  'Color', colors(p,:), 'LineWidth', 1.5, ...
         'HandleVisibility', 'off');
     plot(xx(idx), res_admm.rho_stag(k,idx), 'o', 'Color', colors(p,:), ...
         'MarkerSize', 4, 'MarkerFaceColor', 'none', 'HandleVisibility', 'off');
 end
-h_ref = plot(nan, nan, 'k-',  'LineWidth', 1.5,  'DisplayName', 'Sinkhorn');
-h_num = plot(nan, nan, 'ko',  'MarkerSize', 4,   'DisplayName', 'LADMM', ...
-    'MarkerFaceColor', 'none');
+h_ref = plot(nan,nan, 'k-', 'LineWidth', 1.5, 'DisplayName', 'Sinkhorn');
+h_num = plot(nan,nan, 'ko', 'MarkerSize', 4,  'MarkerFaceColor', 'none', 'DisplayName', 'LADMM');
+h_t3  = gobjects(n_t, 1);
+for p = 1:n_t
+    h_t3(p) = plot(nan,nan, '-', 'Color', colors(p,:), 'LineWidth', 2, ...
+        'DisplayName', sprintf('$t=%.3f$', t_idx(p)*dt));
+end
+legend([h_ref; h_num; h_t3], 'Location', 'best', 'FontSize', 7, 'Interpreter', 'latex', 'Box', 'off');
 xlabel('$x$', 'Interpreter', 'latex');
 ylabel('$\rho$', 'Interpreter', 'latex');
 title(sprintf('Density evolution  ($\\varepsilon$=%.4g)', vareps), 'Interpreter', 'latex');
-legend([h_ref, h_num], 'Location', 'best');
 grid on;
 
 % Right panel: L2 error over time

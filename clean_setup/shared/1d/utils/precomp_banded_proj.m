@@ -23,7 +23,7 @@ function bp = precomp_banded_proj(problem, vareps)
 %   k=2..nx are SPD; their LU factors are stored here.
 %
 %   Output fields:
-%     bp.Tk_L, bp.Tk_U, bp.Tk_P   cell(1,nx)  LU factors for k=2..nx
+%     bp.Tk_L, bp.Tk_U, bp.Tk_P   cell(1,nx)   LU factors for k=2..nx
 
     nt  = problem.nt;   ntm = nt - 1;
     nx  = problem.nx;
@@ -45,10 +45,13 @@ function bp = precomp_banded_proj(problem, vareps)
     M1d(nt)= 1 - vareps / dt;
     M2_bnd = vareps^2 * (It_phi * It_rho);
 
-    % Spatial DCT-II (Neumann) eigenvalues
-    lambda_x = (2 - 2*cos(pi * dx * (0:nx-1))) / dx^2;   % 1 x nx
+    % Spatial DCT-II (Neumann) eigenvalues on [0,L]: (k*pi/L)^2 discrete form
+    lambda_x = problem.lambda_x;   % (1 x nx), set correctly by setup_problem for any L
 
-    % LU-factorize T_k for k=2..nx
+    % LU-factorize T_k for k=2..nx with diagonal preconditioning.
+    % T_k is scaled by D^{-1/2} on both sides before factorization to
+    % reduce the condition number from O(eps^2 * lambda_x) to O(nt).
+    % The scaling vector dk = sqrt(diag(T_k)) is stored for use in the solve.
     Tk_L = cell(1, nx);
     Tk_U = cell(1, nx);
     Tk_P = cell(1, nx);

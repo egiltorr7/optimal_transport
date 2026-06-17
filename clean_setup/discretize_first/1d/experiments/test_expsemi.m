@@ -16,7 +16,7 @@ set(groot, 'defaultAxesTickLabelInterpreter', 'latex');
 set(groot, 'defaultLegendInterpreter',        'latex');
 
 %% --- Config ---
-VAREPS = 2.0;
+VAREPS = 4.0;
 NT     = 256;
 NX     = 128;
 
