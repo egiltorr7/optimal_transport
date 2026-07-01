@@ -18,6 +18,9 @@ if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 cfg      = cfg_ladmm_gaussian();
 prob_def = prob_gaussian();
 problem  = setup_problem(cfg, prob_def);
+cfg.vareps = 2;
+cfg.nx = 128;
+cfg.nt = 128;
 
 %% --- Run ---
 fprintf('Running %s  (nt=%d, nx=%d, gamma=%.4g, tau=%.4g, eps=%.4g)...\n', ...

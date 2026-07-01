@@ -59,6 +59,8 @@ function result = discretize_then_optimize(cfg, problem)
         problem.banded_proj = precomp_banded_proj_spike2(problem, cfg.vareps);
     elseif isequal(cfg.projection, @proj_fokker_planck_pcr)
         problem.banded_proj = precomp_banded_proj_pcr(problem, cfg.vareps);
+    elseif isequal(cfg.projection, @proj_fokker_planck_expsemi)
+        problem.expsemi_proj = precomp_expsemi_proj(problem, cfg.vareps);
     end
 
     % --- GPU setup (cast all persistent arrays before closures are formed) ---
@@ -96,6 +98,12 @@ function result = discretize_then_optimize(cfg, problem)
             problem.banded_proj.b_new    = gpuArray(problem.banded_proj.b_new);
             problem.banded_proj.c_new    = gpuArray(problem.banded_proj.c_new);
             problem.banded_proj.d_new    = gpuArray(problem.banded_proj.d_new);
+        elseif isequal(cfg.projection, @proj_fokker_planck_expsemi)
+            problem.expsemi_proj.lower_all = gpuArray(problem.expsemi_proj.lower_all);
+            problem.expsemi_proj.main_all  = gpuArray(problem.expsemi_proj.main_all);
+            problem.expsemi_proj.upper_all = gpuArray(problem.expsemi_proj.upper_all);
+            problem.expsemi_proj.c_vals    = gpuArray(problem.expsemi_proj.c_vals);
+            problem.expsemi_proj.phi_vals  = gpuArray(problem.expsemi_proj.phi_vals);
         end
     end
 

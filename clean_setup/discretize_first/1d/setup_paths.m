@@ -22,6 +22,5 @@ addpath(fullfile(sh1d, 'pipelines'));            % discretize_then_optimize
 % Local (discretize_first-specific)
 addpath(base);
 addpath(fullfile(base, 'config'));               % cfg_ladmm_gaussian
-addpath(fullfile(base, 'pipelines'));            % discretize_then_optimize
 addpath(fullfile(base, 'prox'));                 % prox_ke_cc
 addpath(fullfile(base, 'experiments'));

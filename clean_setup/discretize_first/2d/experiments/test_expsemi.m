@@ -1,0 +1,289 @@
+% TEST_EXPSEMI_2D  ETD vs Crank–Nicolson projection in 2D.
+%
+%   Compares the ETD exact-semigroup projection (proj_fokker_planck_expsemi)
+%   against the Crank–Nicolson banded projection (proj_fokker_planck_banded)
+%   on two test problems:
+%
+%     (1) Gaussian-to-Gaussian SB (analytical solution available)
+%     (2) Four-peaks cyclic-shift problem (Sinkhorn reference only)
+%
+%   For each problem the script runs:
+%     - 2D Sinkhorn (reference, high accuracy)
+%     - Banded ADMM  (Crank–Nicolson FP projection)
+%     - ExpSemi ADMM (ETD exact-semigroup FP projection)
+%
+%   and reports accuracy and timing across an epsilon sweep.
+%
+%   Figures (saved to results/figures/):
+%     expsemi2d_density_<prob>_eps<e>.pdf   -- density snapshots at t=0.1,0.5,0.9
+%     expsemi2d_l2err_<prob>_eps<e>.pdf     -- L2 error vs time (banded vs expsemi)
+%     expsemi2d_eps_sweep_<prob>.pdf        -- max relative error vs eps (paper figure)
+%     expsemi2d_timing_<prob>.pdf           -- wall time vs eps
+
+clear; close all;
+run(fullfile(fileparts(mfilename('fullpath')), '..', 'setup_paths.m'));
+clear functions
+
+res_dir = fullfile(fileparts(mfilename('fullpath')), '..', 'results');
+fig_dir = fullfile(res_dir, 'figures');
+if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
+
+set(groot, 'defaultTextInterpreter',          'latex');
+set(groot, 'defaultAxesTickLabelInterpreter', 'latex');
+set(groot, 'defaultLegendInterpreter',        'latex');
+
+%% -------------------------------------------------------------------------
+%  Grid and solver settings
+% -------------------------------------------------------------------------
+NT = 64;
+NX = 64;
+NY = 64;
+
+EPS_SWEEP = [0.01, 0.1, 1.0, 10.0, 100.0];
+NE        = numel(EPS_SWEEP);
+
+TOL_WORK = 1e-8;
+
+% Base configs
+cfg_bd           = cfg_ladmm_gaussian();   % banded (Crank–Nicolson)
+cfg_bd.nt        = NT;
+cfg_bd.nx        = NX;
+cfg_bd.ny        = NY;
+cfg_bd.max_iter  = 10000;
+cfg_bd.tol       = TOL_WORK;
+cfg_bd.use_gpu   = false;
+
+cfg_es           = cfg_ladmm_gaussian_expsemi();   % ETD exact semigroup
+cfg_es.nt        = NT;
+cfg_es.nx        = NX;
+cfg_es.ny        = NY;
+cfg_es.max_iter  = 10000;
+cfg_es.tol       = TOL_WORK;
+cfg_es.use_gpu   = false;
+
+% Graphics constants
+FS  = 11;   LW  = 1.6;   MS  = 5;
+col_bd   = [0.84 0.15 0.16];   % red  -> banded
+col_es   = [0.13 0.47 0.71];   % blue -> expsemi
+col_sink = [0.50 0.50 0.50];   % grey -> sinkhorn
+
+%% -------------------------------------------------------------------------
+%  Run both test problems
+% -------------------------------------------------------------------------
+PROBLEMS = { prob_gaussian(),    'gaussian' ; ...
+             prob_four_peaks(),  'four\_peaks' };
+
+for p_idx = 1:size(PROBLEMS, 1)
+    prob_def  = PROBLEMS{p_idx, 1};
+    prob_name = PROBLEMS{p_idx, 2};
+    prob_tag  = prob_def.name;
+
+    fprintf('\n=== Problem: %s  (NT=%d, NX=%d, NY=%d) ===\n', ...
+        prob_name, NT, NX, NY);
+
+    % Storage for eps sweep
+    max_err_bd   = nan(NE, 1);
+    max_err_es   = nan(NE, 1);
+    wall_bd      = nan(NE, 1);
+    wall_es      = nan(NE, 1);
+    wall_sink    = nan(NE, 1);
+    iters_bd     = nan(NE, 1);
+    iters_es     = nan(NE, 1);
+
+    for i = 1:NE
+        eps_i = EPS_SWEEP(i);
+        fprintf('\n  eps = %.4g\n', eps_i);
+
+        cfg_bd.vareps = eps_i;
+        cfg_es.vareps = eps_i;
+        problem_i     = setup_problem(cfg_bd, prob_def);
+
+        nt = problem_i.nt;
+        nx = problem_i.nx;
+        ny = problem_i.ny;
+        dx = problem_i.dx;
+        dy = problem_i.dy;
+        dt = problem_i.dt;
+
+        % ---- Sinkhorn reference ----
+        cfg_sk.vareps            = eps_i;
+        cfg_sk.max_iter          = 5000;
+        cfg_sk.tol               = 1e-10;
+        cfg_sk.precomp_heat      = @precomp_heat_neumann_2d;
+        cfg_sk.use_pdf_marginals = true;
+
+        fprintf('    Sinkhorn  '); t0 = tic;
+        res_sk       = sinkhorn_hopf_cole(problem_i, cfg_sk);
+        wall_sink(i) = toc(t0);
+        fprintf('iters=%d  conv=%d  wall=%.2fs\n', ...
+            res_sk.iters, res_sk.converged, wall_sink(i));
+
+        % Sinkhorn density on cell-centre times (nt slices)
+        rho_sk_cc = 0.5 * (res_sk.rho(1:nt,:,:) + res_sk.rho(2:nt+1,:,:));
+
+        % ---- Banded ADMM ----
+        fprintf('    Banded    '); t0 = tic;
+        res_bd      = discretize_then_optimize(cfg_bd, problem_i);
+        wall_bd(i)  = toc(t0);
+        iters_bd(i) = res_bd.iters;
+        fprintf('iters=%d  conv=%d  wall=%.2fs\n', ...
+            res_bd.iters, res_bd.converged, wall_bd(i));
+
+        % ---- ExpSemi ADMM ----
+        fprintf('    ExpSemi   '); t0 = tic;
+        res_es      = discretize_then_optimize(cfg_es, problem_i);
+        wall_es(i)  = toc(t0);
+        iters_es(i) = res_es.iters;
+        fprintf('iters=%d  conv=%d  wall=%.2fs\n', ...
+            res_es.iters, res_es.converged, wall_es(i));
+
+        % ---- Errors vs Sinkhorn ----
+        dV = dx * dy;   % area element
+
+        err_bd_t  = sqrt(dV * sum(sum( (res_bd.rho_cc - rho_sk_cc).^2, 2), 3));  % (nt x 1)
+        err_es_t  = sqrt(dV * sum(sum( (res_es.rho_cc - rho_sk_cc).^2, 2), 3));
+        nrm_sk_t  = sqrt(dV * sum(sum( rho_sk_cc.^2, 2), 3));
+
+        max_err_bd(i) = max(err_bd_t ./ nrm_sk_t);
+        max_err_es(i) = max(err_es_t ./ nrm_sk_t);
+        fprintf('    max rel L2 err:  banded=%.3e  expsemi=%.3e\n', ...
+            max_err_bd(i), max_err_es(i));
+
+        % ---- Density snapshots at representative eps (first only) ----
+        if i == 2   % eps = 0.1: interesting intermediate regime
+            t_fracs = [0.1, 0.5, 0.9];
+            n_snap  = numel(t_fracs);
+
+            fig_d = figure('Units', 'centimeters', 'Position', [2 2 24 14]);
+            tl_d  = tiledlayout(3, n_snap, 'TileSpacing', 'compact', 'Padding', 'compact');
+
+            clim_max = max(rho_sk_cc(:));
+
+            for s = 1:n_snap
+                k = max(1, round(t_fracs(s) * nt));
+                t_k = (k - 0.5) * dt;
+
+                ax = nexttile(tl_d, s);
+                imagesc(problem_i.xx, problem_i.yy, squeeze(rho_sk_cc(k,:,:))');
+                axis xy; colorbar; clim([0, clim_max]);
+                title(sprintf('Sinkhorn,  $t=%.2f$', t_k), 'FontSize', FS);
+                if s == 1, ylabel('$y$', 'FontSize', FS); end
+                set(ax, 'FontSize', FS-1, 'TickDir', 'out');
+
+                ax = nexttile(tl_d, n_snap + s);
+                imagesc(problem_i.xx, problem_i.yy, squeeze(res_bd.rho_cc(k,:,:))');
+                axis xy; colorbar; clim([0, clim_max]);
+                title(sprintf('Banded,  $t=%.2f$', t_k), 'FontSize', FS);
+                if s == 1, ylabel('$y$', 'FontSize', FS); end
+                set(ax, 'FontSize', FS-1, 'TickDir', 'out');
+
+                ax = nexttile(tl_d, 2*n_snap + s);
+                imagesc(problem_i.xx, problem_i.yy, squeeze(res_es.rho_cc(k,:,:))');
+                axis xy; colorbar; clim([0, clim_max]);
+                title(sprintf('ExpSemi,  $t=%.2f$', t_k), 'FontSize', FS);
+                xlabel('$x$', 'FontSize', FS);
+                if s == 1, ylabel('$y$', 'FontSize', FS); end
+                set(ax, 'FontSize', FS-1, 'TickDir', 'out');
+            end
+            sgtitle(sprintf('%s  ($\\varepsilon = %.4g$,  $N_T=%d$,  $N_x=N_y=%d$)', ...
+                strrep(prob_name, '_', '\_'), eps_i, NT, NX), 'FontSize', FS+1);
+
+            fname = sprintf('expsemi2d_density_%s_eps%g', prob_tag, eps_i);
+            exportgraphics(fig_d, fullfile(fig_dir, [fname '.pdf']), 'ContentType', 'vector');
+            saveas(fig_d, fullfile(fig_dir, [fname '.png']));
+            close(fig_d);
+
+            % ---- L2 error vs time (banded vs expsemi) ----
+            t_cc = ((1:nt)' - 0.5) * dt;
+
+            fig_e = figure('Units', 'centimeters', 'Position', [2 2 16 7]);
+            tl_e  = tiledlayout(1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+
+            nexttile;
+            semilogy(t_cc, err_bd_t, '-', 'Color', col_bd, 'LineWidth', LW, 'DisplayName', 'Banded');
+            hold on;
+            semilogy(t_cc, err_es_t, '-', 'Color', col_es, 'LineWidth', LW, 'DisplayName', 'ExpSemi');
+            xlabel('$t$', 'FontSize', FS);
+            ylabel('$\|\rho - \rho_{\rm Sink}\|_{L^2(x,y)}$', 'FontSize', FS);
+            title('(a) Absolute $L^2$ error', 'FontSize', FS);
+            legend('Location', 'best', 'FontSize', FS-1, 'Box', 'off');
+            set(gca, 'FontSize', FS, 'Box', 'on', 'TickDir', 'out'); grid on;
+
+            nexttile;
+            semilogy(t_cc, err_bd_t ./ nrm_sk_t, '-', 'Color', col_bd, 'LineWidth', LW, 'DisplayName', 'Banded');
+            hold on;
+            semilogy(t_cc, err_es_t ./ nrm_sk_t, '-', 'Color', col_es, 'LineWidth', LW, 'DisplayName', 'ExpSemi');
+            xlabel('$t$', 'FontSize', FS);
+            ylabel('$\|\rho - \rho_{\rm Sink}\|_{L^2} / \|\rho_{\rm Sink}\|_{L^2}$', 'FontSize', FS);
+            title('(b) Relative $L^2$ error', 'FontSize', FS);
+            legend('Location', 'best', 'FontSize', FS-1, 'Box', 'off');
+            set(gca, 'FontSize', FS, 'Box', 'on', 'TickDir', 'out'); grid on;
+
+            sgtitle(sprintf('%s  ($\\varepsilon = %.4g$)', strrep(prob_name,'_','\_'), eps_i), ...
+                'FontSize', FS+1);
+
+            fname = sprintf('expsemi2d_l2err_%s_eps%g', prob_tag, eps_i);
+            exportgraphics(fig_e, fullfile(fig_dir, [fname '.pdf']), 'ContentType', 'vector');
+            saveas(fig_e, fullfile(fig_dir, [fname '.png']));
+            close(fig_e);
+        end
+    end   % eps sweep
+
+    % ---- Eps sweep summary figure ----
+    fig_s = figure('Units', 'centimeters', 'Position', [2 2 24 7]);
+    tl_s  = tiledlayout(1, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
+
+    nexttile;
+    loglog(EPS_SWEEP, max_err_bd, '-o', 'Color', col_bd,   'LineWidth', LW, ...
+        'MarkerSize', MS, 'MarkerFaceColor', col_bd,   'DisplayName', 'Banded (CN)');
+    hold on;
+    loglog(EPS_SWEEP, max_err_es, '-^', 'Color', col_es,   'LineWidth', LW, ...
+        'MarkerSize', MS, 'MarkerFaceColor', col_es,   'DisplayName', 'ExpSemi (ETD)');
+    xlabel('$\varepsilon$', 'FontSize', FS);
+    ylabel('$\max_t \|\rho - \rho_{\rm Sink}\|_{L^2} / \|\rho_{\rm Sink}\|_{L^2}$', 'FontSize', FS);
+    title('(a) Max relative $L^2$ error', 'FontSize', FS);
+    legend('Location', 'best', 'FontSize', FS-1, 'Box', 'off');
+    set(gca, 'FontSize', FS, 'Box', 'on', 'TickDir', 'out'); grid on;
+
+    nexttile;
+    loglog(EPS_SWEEP, wall_bd,   '-o', 'Color', col_bd,   'LineWidth', LW, ...
+        'MarkerSize', MS, 'MarkerFaceColor', col_bd,   'DisplayName', 'Banded (CN)');
+    hold on;
+    loglog(EPS_SWEEP, wall_es,   '-^', 'Color', col_es,   'LineWidth', LW, ...
+        'MarkerSize', MS, 'MarkerFaceColor', col_es,   'DisplayName', 'ExpSemi (ETD)');
+    loglog(EPS_SWEEP, wall_sink, '-s', 'Color', col_sink, 'LineWidth', LW, ...
+        'MarkerSize', MS, 'MarkerFaceColor', col_sink, 'DisplayName', 'Sinkhorn');
+    xlabel('$\varepsilon$', 'FontSize', FS);
+    ylabel('Wall time (s)', 'FontSize', FS);
+    title('(b) Computational cost', 'FontSize', FS);
+    legend('Location', 'best', 'FontSize', FS-1, 'Box', 'off');
+    set(gca, 'FontSize', FS, 'Box', 'on', 'TickDir', 'out'); grid on;
+
+    nexttile;
+    loglog(EPS_SWEEP, iters_bd, '-o', 'Color', col_bd,  'LineWidth', LW, ...
+        'MarkerSize', MS, 'MarkerFaceColor', col_bd,  'DisplayName', 'Banded (CN)');
+    hold on;
+    loglog(EPS_SWEEP, iters_es, '-^', 'Color', col_es,  'LineWidth', LW, ...
+        'MarkerSize', MS, 'MarkerFaceColor', col_es,  'DisplayName', 'ExpSemi (ETD)');
+    xlabel('$\varepsilon$', 'FontSize', FS);
+    ylabel('ADMM iterations', 'FontSize', FS);
+    title('(c) Iteration count', 'FontSize', FS);
+    legend('Location', 'best', 'FontSize', FS-1, 'Box', 'off');
+    set(gca, 'FontSize', FS, 'Box', 'on', 'TickDir', 'out'); grid on;
+
+    sgtitle(sprintf('%s  ($N_T=%d$, $N_x=N_y=%d$)', ...
+        strrep(prob_name, '_', '\_'), NT, NX), 'FontSize', FS+1);
+
+    fname = sprintf('expsemi2d_eps_sweep_%s_nt%d_nx%d', prob_tag, NT, NX);
+    exportgraphics(fig_s, fullfile(fig_dir, [fname '.pdf']), 'ContentType', 'vector');
+    saveas(fig_s, fullfile(fig_dir, [fname '.png']));
+    close(fig_s);
+    fprintf('\nSweep figure saved: %s\n', fname);
+
+    % Save sweep data
+    save(fullfile(res_dir, sprintf('expsemi2d_sweep_%s_nt%d_nx%d.mat', prob_tag, NT, NX)), ...
+        'EPS_SWEEP', 'NT', 'NX', 'NY', ...
+        'max_err_bd', 'max_err_es', ...
+        'wall_bd', 'wall_es', 'wall_sink', ...
+        'iters_bd', 'iters_es');
+end   % problem loop

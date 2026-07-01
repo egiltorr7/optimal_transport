@@ -2,8 +2,8 @@
 %
 %   Figures (saved to results/figures/):
 %     expsemi_density_<tag>.png   -- density evolution, expsemi vs Sinkhorn
-%     expsemi_l2err_<tag>.png     -- L2 error vs Sinkhorn over time
-%     expsemi_eps_sweep.png       -- max L2 error vs eps
+%     expsemi_l2err_<tag>.png     -- absolute + relative L2 error vs Sinkhorn over time
+%     expsemi_eps_sweep.png       -- max absolute + relative L2 error vs eps
 
 clear; close all;
 run(fullfile(fileparts(mfilename('fullpath')), '..', 'setup_paths.m'));
@@ -16,9 +16,9 @@ set(groot, 'defaultAxesTickLabelInterpreter', 'latex');
 set(groot, 'defaultLegendInterpreter',        'latex');
 
 %% --- Config ---
-VAREPS = 4.0;
+VAREPS = 100;
 NT     = 256;
-NX     = 128;
+NX     = 256;
 
 cfg_es          = cfg_ladmm_gaussian_expsemi();
 cfg_es.vareps   = VAREPS;
@@ -26,8 +26,8 @@ cfg_es.nt       = NT;
 cfg_es.nx       = NX;
 
 cfg_sink.vareps       = VAREPS;
-cfg_sink.max_iter     = 500;
-cfg_sink.tol          = 1e-10;
+cfg_sink.max_iter     = 5000;
+cfg_sink.tol          = -1;
 cfg_sink.precomp_heat = @precomp_heat_neumann;
 
 prob_def = prob_gaussian();
@@ -54,7 +54,11 @@ fprintf('  iters=%d  converged=%d  wall=%.1fs\n', ...
 rho_sink_stag = res_sink.rho(2:nt, :);   % (ntm x nx)
 t_stag_vec    = (1:ntm)' * dt;
 
-err_es = sqrt(dx * sum((res_es.rho_stag - rho_sink_stag).^2, 2));
+err_es      = sqrt(dx * sum((res_es.rho_stag - rho_sink_stag).^2, 2));
+norm_ref    = sqrt(dx * sum(rho_sink_stag.^2, 2));
+% delta_ref   = 1e-3 * max(norm_ref);
+delta_ref = 0.0;
+rel_err_es  = err_es ./ (norm_ref + delta_ref);
 
 %% --- Figure 1: density evolution ---
 t_fracs = [0.1, 0.25, 0.5, 0.75, 0.9];
@@ -94,22 +98,35 @@ set(gca, 'FontSize', FS, 'Box','on', 'TickDir','out');
 grid on;
 saveas(fig1, fullfile(fig_dir, sprintf('expsemi_density_%s.png', ftag)));
 
-%% --- Figure 2: L2 error vs Sinkhorn ---
-fig2 = figure('Units','centimeters','Position',[2 2 14 9]);
+%% --- Figure 2: absolute + relative L2 error vs Sinkhorn ---
+fig2 = figure('Units','centimeters','Position',[2 2 22 9]);
+
+subplot(1,2,1);
 semilogy(t_stag_vec, err_es, 'r-', 'LineWidth', LW);
 xlabel('$t$', 'FontSize', FS);
 ylabel('$\|\tilde{\rho}^* - \rho_\mathrm{Sink}\|_{L^2(x)}$', 'FontSize', FS);
-title(sprintf('$L^2$ error vs Sinkhorn  ($\\varepsilon=%.4g$)', VAREPS), 'FontSize', FS);
+title(sprintf('Absolute $L^2$ error ($\\varepsilon=%.4g$)', VAREPS), 'FontSize', FS);
 set(gca, 'FontSize', FS, 'Box','on', 'TickDir','out');
 grid on;
+
+subplot(1,2,2);
+semilogy(t_stag_vec, rel_err_es, 'b-', 'LineWidth', LW);
+xlabel('$t$', 'FontSize', FS);
+ylabel('$\|\tilde{\rho}^* - \rho_\mathrm{Sink}\|_{L^2} / \|\rho_\mathrm{Sink}\|_{L^2}$', 'FontSize', FS);
+title(sprintf('Relative $L^2$ error ($\\varepsilon=%.4g$)', VAREPS), 'FontSize', FS);
+set(gca, 'FontSize', FS, 'Box','on', 'TickDir','out');
+grid on;
+
 saveas(fig2, fullfile(fig_dir, sprintf('expsemi_l2err_%s.png', ftag)));
 
 %% --- Figure 3: max error vs eps sweep ---
-eps_vals = [0.1, 0.5, 1.0, 2.0, 4.0];
+eps_vals = [1e-2,0.1, 0.5, 1.0, 2.0, 4.0];
 ne       = numel(eps_vals);
-max_err  = nan(1, ne);
+max_err     = nan(1, ne);
+max_rel_err = nan(1, ne);
 
 fprintf('\nEps sweep (NT=%d, NX=%d):\n', NT, NX);
+fprintf('  %-8s  %-14s  %-14s\n', 'eps', 'max_abs_err', 'max_rel_err');
 for i = 1:ne
     eps_i = eps_vals(i);
 
@@ -124,26 +141,39 @@ for i = 1:ne
     res_sk_i = sinkhorn_hopf_cole(prob_i, cfg_sk_i);
     res_es_i = discretize_then_optimize(cfg_i, prob_i);
 
-    rho_ref    = res_sk_i.rho(2:prob_i.nt, :);
-    e          = sqrt(prob_i.dx * sum((res_es_i.rho_stag - rho_ref).^2, 2));
-    max_err(i) = max(e);
+    rho_ref      = res_sk_i.rho(2:prob_i.nt, :);
+    e            = sqrt(prob_i.dx * sum((res_es_i.rho_stag - rho_ref).^2, 2));
+    nrm_ref      = sqrt(prob_i.dx * sum(rho_ref.^2, 2));
+    delta_i      = 0.0;
+    rel_e        = e ./ (nrm_ref + delta_i);
+    max_err(i)     = max(e);
+    max_rel_err(i) = max(rel_e);
 
-    fprintf('  eps=%-5g  max_err=%.2e\n', eps_i, max_err(i));
+    fprintf('  %-8g  %-14.2e  %-14.2e\n', eps_i, max_err(i), max_rel_err(i));
 end
 
-fig3 = figure('Units','centimeters','Position',[2 2 14 9]);
-hold on;
-set(gca, 'XScale', 'log', 'YScale', 'log');
-plot(eps_vals, max_err, 'r^-', 'LineWidth', LW, 'MarkerSize', 6);
+fig3 = figure('Units','centimeters','Position',[2 2 22 9]);
+
+subplot(1,2,1);
+loglog(eps_vals, max_err, 'r^-', 'LineWidth', LW, 'MarkerSize', 6);
 xlabel('$\varepsilon$', 'FontSize', FS);
 ylabel('$\max_t \|\tilde{\rho} - \rho_\mathrm{Sink}\|_{L^2(x)}$', 'FontSize', FS);
-title(sprintf('Expsemi-ADMM: max $L^2$ error vs $\\varepsilon$  ($N_T=%d$, $N_x=%d$)', NT, NX), 'FontSize', FS);
+title(sprintf('Max absolute error vs $\\varepsilon$  ($N_T=%d$, $N_x=%d$)', NT, NX), 'FontSize', FS);
 set(gca, 'FontSize', FS, 'Box','on', 'TickDir','out');
 grid on;
+
+subplot(1,2,2);
+loglog(eps_vals, max_rel_err, 'b^-', 'LineWidth', LW, 'MarkerSize', 6);
+xlabel('$\varepsilon$', 'FontSize', FS);
+ylabel('$\max_t \|\tilde{\rho} - \rho_\mathrm{Sink}\|_{L^2} / \|\rho_\mathrm{Sink}\|_{L^2}$', 'FontSize', FS);
+title(sprintf('Max relative error vs $\\varepsilon$  ($N_T=%d$, $N_x=%d$)', NT, NX), 'FontSize', FS);
+set(gca, 'FontSize', FS, 'Box','on', 'TickDir','out');
+grid on;
+
 saveas(fig3, fullfile(fig_dir, 'expsemi_eps_sweep.png'));
 
 %% --- Summary ---
 fprintf('\n--- Summary (eps=%.4g, nt=%d, nx=%d) ---\n', VAREPS, NT, NX);
 fprintf('  Sinkhorn:     wall=%.2fs  iters=%d\n', res_sink.walltime, res_sink.iters);
-fprintf('  Expsemi-ADMM: wall=%.2fs  iters=%d  max_err=%.3e\n', ...
-    res_es.walltime, res_es.iters, max(err_es));
+fprintf('  Expsemi-ADMM: wall=%.2fs  iters=%d  max_abs_err=%.3e  max_rel_err=%.3e\n', ...
+    res_es.walltime, res_es.iters, max(err_es), max(rel_err_es));

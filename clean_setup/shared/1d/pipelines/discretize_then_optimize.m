@@ -72,15 +72,20 @@ function result = discretize_then_optimize(cfg, problem)
     end
 
     % --- Initial guesses ---
-    % x on staggered grid
-    t_stag = linspace(0, 1, ntm)';
-    x0.rho = (1 - t_stag) .* rho0 + t_stag .* rho1;   % (ntm x nx)
-    x0.mx  = zeros(nt, nxm);                            % (nt  x nxm)
+    if isfield(cfg, 'x0') && isfield(cfg, 'y0')
+        x0 = cfg.x0;
+        y0 = cfg.y0;
+    else
+        % x on staggered grid
+        t_stag = linspace(0, 1, ntm)';
+        x0.rho = (1 - t_stag) .* rho0 + t_stag .* rho1;   % (ntm x nx)
+        x0.mx  = zeros(nt, nxm);                            % (nt  x nxm)
 
-    % y on cell-centre grid
-    t_cc   = ((1:nt)' - 0.5) * dt;
-    y0.rho = (1 - t_cc) .* rho0 + t_cc .* rho1;        % (nt x nx)
-    y0.mx  = zeros(nt, nx);                             % (nt x nx)
+        % y on cell-centre grid
+        t_cc   = ((1:nt)' - 0.5) * dt;
+        y0.rho = (1 - t_cc) .* rho0 + t_cc .* rho1;        % (nt x nx)
+        y0.mx  = zeros(nt, nx);                             % (nt x nx)
+    end
 
     % b = 0 on cell-centre grid (BCs absorbed into affine A_fn)
     b = s_zeros(y0);
