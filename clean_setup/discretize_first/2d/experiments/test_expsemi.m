@@ -53,6 +53,7 @@ cfg_bd.ny        = NY;
 cfg_bd.max_iter  = 10000;
 cfg_bd.tol       = TOL_WORK;
 cfg_bd.use_gpu   = true;
+cfg_bd.gpu_device = 1;   
 
 cfg_es           = cfg_ladmm_gaussian_expsemi();   % ETD exact semigroup
 cfg_es.nt        = NT;
@@ -61,6 +62,7 @@ cfg_es.ny        = NY;
 cfg_es.max_iter  = 10000;
 cfg_es.tol       = TOL_WORK;
 cfg_es.use_gpu   = true;
+cfg_es.gpu_device = 1;
 cfg_es.projection = @proj_fokker_planck_expsemi_gpu;
 
 % Graphics constants
