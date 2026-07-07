@@ -191,7 +191,7 @@ for p_idx = 1:size(PROBLEMS, 1)
                 strrep(prob_name, '_', '\_'), eps_i, NT, NX), 'FontSize', FS+1);
 
             fname = sprintf('expsemi2d_density_%s_eps%g', prob_tag, eps_i);
-            exportgraphics(fig_d, fullfile(fig_dir, [fname '.pdf']), 'ContentType', 'vector');
+            print(fig_d, fullfile(fig_dir, fname), '-dpdf', '-painters');
             saveas(fig_d, fullfile(fig_dir, [fname '.png']));
             close(fig_d);
 
@@ -225,7 +225,7 @@ for p_idx = 1:size(PROBLEMS, 1)
                 'FontSize', FS+1);
 
             fname = sprintf('expsemi2d_l2err_%s_eps%g', prob_tag, eps_i);
-            exportgraphics(fig_e, fullfile(fig_dir, [fname '.pdf']), 'ContentType', 'vector');
+            print(fig_e, fullfile(fig_dir, fname), '-dpdf', '-painters');
             saveas(fig_e, fullfile(fig_dir, [fname '.png']));
             close(fig_e);
         end
@@ -277,7 +277,7 @@ for p_idx = 1:size(PROBLEMS, 1)
         strrep(prob_name, '_', '\_'), NT, NX), 'FontSize', FS+1);
 
     fname = sprintf('expsemi2d_eps_sweep_%s_nt%d_nx%d', prob_tag, NT, NX);
-    exportgraphics(fig_s, fullfile(fig_dir, [fname '.pdf']), 'ContentType', 'vector');
+    print(fig_s, fullfile(fig_dir, fname), '-dpdf', '-painters');
     saveas(fig_s, fullfile(fig_dir, [fname '.png']));
     close(fig_s);
     fprintf('\nSweep figure saved: %s\n', fname);
