@@ -59,7 +59,8 @@ function result = discretize_then_optimize(cfg, problem)
         problem.banded_proj = precomp_banded_proj_spike2(problem, cfg.vareps);
     elseif isequal(cfg.projection, @proj_fokker_planck_pcr)
         problem.banded_proj = precomp_banded_proj_pcr(problem, cfg.vareps);
-    elseif isequal(cfg.projection, @proj_fokker_planck_expsemi)
+    elseif isequal(cfg.projection, @proj_fokker_planck_expsemi) || ...
+           isequal(cfg.projection, @proj_fokker_planck_expsemi_gpu)
         problem.expsemi_proj = precomp_expsemi_proj(problem, cfg.vareps);
     end
 
@@ -98,7 +99,8 @@ function result = discretize_then_optimize(cfg, problem)
             problem.banded_proj.b_new    = gpuArray(problem.banded_proj.b_new);
             problem.banded_proj.c_new    = gpuArray(problem.banded_proj.c_new);
             problem.banded_proj.d_new    = gpuArray(problem.banded_proj.d_new);
-        elseif isequal(cfg.projection, @proj_fokker_planck_expsemi)
+        elseif isequal(cfg.projection, @proj_fokker_planck_expsemi) || ...
+               isequal(cfg.projection, @proj_fokker_planck_expsemi_gpu)
             problem.expsemi_proj.lower_all = gpuArray(problem.expsemi_proj.lower_all);
             problem.expsemi_proj.main_all  = gpuArray(problem.expsemi_proj.main_all);
             problem.expsemi_proj.upper_all = gpuArray(problem.expsemi_proj.upper_all);

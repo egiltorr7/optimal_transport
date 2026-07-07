@@ -28,6 +28,7 @@ res_dir = fullfile(fileparts(mfilename('fullpath')), '..', 'results');
 fig_dir = fullfile(res_dir, 'figures');
 if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 
+set(groot, 'defaultFigureVisible',            'off');
 set(groot, 'defaultTextInterpreter',          'latex');
 set(groot, 'defaultAxesTickLabelInterpreter', 'latex');
 set(groot, 'defaultLegendInterpreter',        'latex');
@@ -51,7 +52,7 @@ cfg_bd.nx        = NX;
 cfg_bd.ny        = NY;
 cfg_bd.max_iter  = 10000;
 cfg_bd.tol       = TOL_WORK;
-cfg_bd.use_gpu   = false;
+cfg_bd.use_gpu   = true;
 
 cfg_es           = cfg_ladmm_gaussian_expsemi();   % ETD exact semigroup
 cfg_es.nt        = NT;
@@ -59,7 +60,8 @@ cfg_es.nx        = NX;
 cfg_es.ny        = NY;
 cfg_es.max_iter  = 10000;
 cfg_es.tol       = TOL_WORK;
-cfg_es.use_gpu   = false;
+cfg_es.use_gpu   = true;
+cfg_es.projection = @proj_fokker_planck_expsemi_gpu;
 
 % Graphics constants
 FS  = 11;   LW  = 1.6;   MS  = 5;
