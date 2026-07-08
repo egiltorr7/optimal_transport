@@ -37,6 +37,7 @@ prob_def           = prob_gaussian();
 prob_def.rho0_func = @(xx, yy) Normal2d(xx, yy, MU0(1), MU0(2), SIGMA);
 prob_def.rho1_func = @(xx, yy) Normal2d(xx, yy, MU1(1), MU1(2), SIGMA);
 
+
 %% -------------------------------------------------------------------------
 %  Grid refinement levels:  [NT, NX]  (NY = NX always)
 % -------------------------------------------------------------------------
