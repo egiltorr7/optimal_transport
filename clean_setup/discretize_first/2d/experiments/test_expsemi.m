@@ -42,7 +42,7 @@ cfg_es.ny           = NY;
 cfg_es.max_iter     = 10000;
 cfg_es.tol          = TOL_WORK;
 cfg_es.use_gpu      = true;
-cfg_es.gpu_device   = 1;
+cfg_es.gpu_device   = 4;
 cfg_es.print_every  = 2000;
 cfg_es.projection   = @proj_fokker_planck_expsemi_gpu;
 
