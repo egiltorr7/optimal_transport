@@ -106,6 +106,20 @@ function result = discretize_then_optimize(cfg, problem)
             problem.expsemi_proj.upper_all = gpuArray(problem.expsemi_proj.upper_all);
             problem.expsemi_proj.c_vals    = gpuArray(problem.expsemi_proj.c_vals);
             problem.expsemi_proj.phi_vals  = gpuArray(problem.expsemi_proj.phi_vals);
+            if isequal(cfg.projection, @proj_fokker_planck_expsemi_gpu)
+                % Extra fields for the optimised GPU projection:
+                %   Thomas diagonals in (M x nt) layout for coalesced access
+                %   Precomputed DCT twiddles to avoid per-call exp()
+                problem.expsemi_proj.lower_T = gpuArray(problem.expsemi_proj.lower_T);
+                problem.expsemi_proj.main_T  = gpuArray(problem.expsemi_proj.main_T);
+                problem.expsemi_proj.upper_T = gpuArray(problem.expsemi_proj.upper_T);
+                problem.expsemi_proj.tw_x    = gpuArray(problem.expsemi_proj.tw_x);
+                problem.expsemi_proj.w_x     = gpuArray(problem.expsemi_proj.w_x);
+                problem.expsemi_proj.itw_x   = gpuArray(problem.expsemi_proj.itw_x);
+                problem.expsemi_proj.tw_y    = gpuArray(problem.expsemi_proj.tw_y);
+                problem.expsemi_proj.w_y     = gpuArray(problem.expsemi_proj.w_y);
+                problem.expsemi_proj.itw_y   = gpuArray(problem.expsemi_proj.itw_y);
+            end
         end
     end
 

@@ -73,4 +73,24 @@ function ep = precomp_expsemi_proj(problem, vareps)
 
     % Mode (1,1): lxy = 0 -> singular T; set main = 1 so Thomas gives 0 on 0 RHS.
     ep.main_all(:, 1, 1) = 1;
+
+    % --- GPU-optimised Thomas layout: (M x nt/ntm) where M = nx*ny ---
+    % Stored alongside the standard layout so proj_fokker_planck_expsemi_gpu can
+    % use coalesced column access  b(:,i)  instead of strided  b(i,:,:).
+    M = nx * ny;
+    ep.lower_T = reshape(permute(ep.lower_all, [2,3,1]), M, ntm);
+    ep.main_T  = reshape(permute(ep.main_all,  [2,3,1]), M, nt);
+    ep.upper_T = reshape(permute(ep.upper_all, [2,3,1]), M, ntm);
+
+    % --- Precomputed DCT twiddle factors (1 x nx x 1) and (1 x 1 x ny) ---
+    % Eliminates exp() recomputation every projection call.
+    kx = reshape(0:nx-1, 1, nx, 1);
+    ep.tw_x  = exp(-1i * pi * kx / (2*nx));                     % (1 x nx x 1)
+    ep.w_x   = reshape([1/sqrt(nx), sqrt(2/nx)*ones(1,nx-1)]/2, 1, nx, 1);
+    ep.itw_x = conj(ep.tw_x);
+
+    ky = reshape(0:ny-1, 1, 1, ny);
+    ep.tw_y  = exp(-1i * pi * ky / (2*ny));                     % (1 x 1 x ny)
+    ep.w_y   = reshape([1/sqrt(ny), sqrt(2/ny)*ones(1,ny-1)]/2, 1, 1, ny);
+    ep.itw_y = conj(ep.tw_y);
 end
