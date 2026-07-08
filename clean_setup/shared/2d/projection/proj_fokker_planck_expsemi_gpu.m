@@ -1,30 +1,40 @@
 function x_out = proj_fokker_planck_expsemi_gpu(x_in, problem, cfg)
-% PROJ_FOKKER_PLANCK_EXPSEMI_GPU  2D FP projection via ETD.  GPU-compatible.
+% PROJ_FOKKER_PLANCK_EXPSEMI_GPU  2D FP projection via ETD.  GPU-optimised.
 %
-%   Identical to proj_fokker_planck_expsemi but replaces MATLAB's dct/idct
-%   with FFT-based dct_rows/idct_rows (local) that work on gpuArray.
+%   Optimisations over proj_fokker_planck_expsemi:
+%     - Thomas solver uses (nx*ny x nt) memory layout → coalesced GPU column
+%       access instead of strided slice access
+%     - DCT uses direct fft(A,[],2) / fft(A,[],3) on the 3D array, eliminating
+%       the four permute() calls per 2-D DCT
+%     - Twiddle factors and orthonormalisation weights are precomputed in
+%       precomp_expsemi_proj and cast to GPU once before the solve loop
 %
 %   Requires:
-%     problem.expsemi_proj   precomputed by precomp_expsemi_proj(problem, vareps)
+%     problem.expsemi_proj   precomputed by precomp_expsemi_proj(problem,vareps)
+%     Fields used from ep:
+%       c_vals, phi_vals              (1 x nx x ny)
+%       lower_T, main_T, upper_T     (M x ntm/nt), M = nx*ny
+%       tw_x, w_x, itw_x             (1 x nx x 1)
+%       tw_y, w_y, itw_y             (1 x 1 x ny)
 %
-%   Grid (same as proj_fokker_planck_expsemi):
-%     x_in.rho  (ntm x nx  x ny)   staggered density
-%     x_in.mx   (nt  x nxm x ny)   staggered x-momentum
-%     x_in.my   (nt  x nx  x nym)  staggered y-momentum
+%   Grid:
+%     x_in.rho  (ntm x nx  x ny)
+%     x_in.mx   (nt  x nxm x ny)
+%     x_in.my   (nt  x nx  x nym)
 
     ops  = problem.ops;
-    rho0 = problem.rho0;   % (nx x ny)
-    rho1 = problem.rho1;   % (nx x ny)
+    rho0 = problem.rho0;
+    rho1 = problem.rho1;
     nt   = problem.nt;   ntm = nt - 1;
     nx   = problem.nx;
     ny   = problem.ny;
     ep   = problem.expsemi_proj;
-    c_vals   = ep.c_vals;    % (1 x nx x ny)
-    phi_vals = ep.phi_vals;  % (1 x nx x ny)
+    c_vals   = ep.c_vals;
+    phi_vals = ep.phi_vals;
 
-    mu    = x_in.rho;   % (ntm x nx x ny)
-    psi_x = x_in.mx;   % (nt  x nxm x ny)
-    psi_y = x_in.my;   % (nt  x nx  x nym)
+    mu    = x_in.rho;
+    psi_x = x_in.mx;
+    psi_y = x_in.my;
 
     rho0_3d = reshape(rho0, 1, nx, ny);
     rho1_3d = reshape(rho1, 1, nx, ny);
@@ -32,16 +42,16 @@ function x_out = proj_fokker_planck_expsemi_gpu(x_in, problem, cfg)
     zeros_y = zeros(nt, nx, 'like', mu);
 
     %% --- ETD FP residual in DCT-xy space ---
-    mu_prev = cat(1, rho0_3d, mu);   % (nt x nx x ny)
-    mu_curr = cat(1, mu, rho1_3d);   % (nt x nx x ny)
+    mu_prev = cat(1, rho0_3d, mu);
+    mu_curr = cat(1, mu, rho1_3d);
 
-    mu_prev_hat = dct2_xy_gpu(mu_prev, nt, nx, ny);
-    mu_curr_hat = dct2_xy_gpu(mu_curr, nt, nx, ny);
+    mu_prev_hat = dct2_xy(mu_prev, ep);
+    mu_curr_hat = dct2_xy(mu_curr, ep);
     f_rho_hat   = (mu_curr_hat - c_vals .* mu_prev_hat) / problem.dt;
 
     div_psi = ops.deriv_x_at_phi(psi_x, zeros_x, zeros_x) ...
-            + ops.deriv_y_at_phi(psi_y, zeros_y, zeros_y);   % (nt x nx x ny)
-    div_psi_hat = dct2_xy_gpu(div_psi, nt, nx, ny);
+            + ops.deriv_y_at_phi(psi_y, zeros_y, zeros_y);
+    div_psi_hat = dct2_xy(div_psi, ep);
 
     f_hat = f_rho_hat + phi_vals .* div_psi_hat;
 
@@ -50,89 +60,99 @@ function x_out = proj_fokker_planck_expsemi_gpu(x_in, problem, cfg)
         return;
     end
 
-    %% --- Batched Thomas solve for all (kx, ky) modes ---
+    %% --- Batched Thomas solve (kx,ky) != (1,1) ---
     rhs          = f_hat;
-    rhs(:, 1, 1) = 0;   % DC mode handled separately below
+    rhs(:, 1, 1) = 0;
 
-    phi_hat = thomas_solve(ep.lower_all, ep.main_all, ep.upper_all, rhs, nt, nx, ny);
+    phi_hat = thomas_solve(ep, rhs, nt, nx, ny);
 
-    %% --- DC spatial mode (kx=1, ky=1): singular T, handled via DCT in time ---
-    f1_col         = f_hat(:, 1, 1);                                % (nt x 1)
-    f1_t           = dct_rows_gpu(f1_col');                         % (1 x nt)
+    %% --- DC mode (kx=1,ky=1): singular T, solve via 1-D DCT in time ---
+    f1_col         = f_hat(:, 1, 1);
+    f1_t           = dct_rows_gpu(f1_col');
     phi1_t         = zeros(1, nt, 'like', f_hat);
     phi1_t(2:end)  = f1_t(2:end) ./ reshape(problem.lambda_t(2:end), 1, []);
-    phi_hat(:,1,1) = idct_rows_gpu(phi1_t)';                        % (nt x 1)
+    phi_hat(:,1,1) = idct_rows_gpu(phi1_t)';
 
-    %% --- rho update: adj_rho_hat = (c * phi_next - phi_curr) / dt ---
-    phi_hat_curr = phi_hat(1:ntm, :, :);     % (ntm x nx x ny)
-    phi_hat_next = phi_hat(2:nt,  :, :);     % (ntm x nx x ny)
+    %% --- rho update ---
+    phi_hat_curr = phi_hat(1:ntm, :, :);
+    phi_hat_next = phi_hat(2:nt,  :, :);
     adj_rho_hat  = (c_vals .* phi_hat_next - phi_hat_curr) / problem.dt;
-    adj_rho      = idct2_xy_gpu(adj_rho_hat, ntm, nx, ny);
+    adj_rho      = idct2_xy(adj_rho_hat, ep);
 
     x_out.rho = mu + adj_rho;
 
-    %% --- mx/my update: delta_m = D_{x,y}^T [ IDCT(phi_vals .* phi_hat) ] ---
-    phi_weighted = idct2_xy_gpu(phi_vals .* phi_hat, nt, nx, ny);   % (nt x nx x ny)
+    %% --- mx / my update ---
+    phi_weighted = idct2_xy(phi_vals .* phi_hat, ep);
     x_out.mx = psi_x + ops.deriv_x_at_m(phi_weighted);
     x_out.my = psi_y + ops.deriv_y_at_m(phi_weighted);
 end
 
 % ---------------------------------------------------------------------------
-% Batched Thomas (TDMA) — identical to proj_fokker_planck_expsemi.
-% GPU-compatible: sequential over nt, vectorised element-wise over nx*ny.
+% 2-D DCT-II along x (dim 2) then y (dim 3) — no permutes.
+% Uses precomputed twiddles from ep.
 % ---------------------------------------------------------------------------
 
-function phi_hat = thomas_solve(lower_all, main_all, upper_all, f_hat, nt, nx, ny)
-    b = main_all;
-    d = f_hat;
+function f_hat = dct2_xy(f, ep)
+    % DCT along x (dim 2)
+    Nx = size(f, 2);
+    xe = cat(2, f, f(:, Nx:-1:1, :));
+    V  = fft(xe, [], 2);
+    f_hat = real(V(:, 1:Nx, :) .* ep.tw_x) .* ep.w_x;
 
-    for i = 2:nt
-        w        = lower_all(i-1,:,:) ./ b(i-1,:,:);
-        b(i,:,:) = b(i,:,:) - w .* upper_all(i-1,:,:);
-        d(i,:,:) = d(i,:,:) - w .* d(i-1,:,:);
-    end
-
-    phi_hat        = zeros(nt, nx, ny, 'like', f_hat);
-    phi_hat(nt,:,:) = d(nt,:,:) ./ b(nt,:,:);
-    for i = nt-1:-1:1
-        phi_hat(i,:,:) = (d(i,:,:) - upper_all(i,:,:) .* phi_hat(i+1,:,:)) ./ b(i,:,:);
-    end
+    % DCT along y (dim 3)
+    Ny = size(f_hat, 3);
+    ye = cat(3, f_hat, f_hat(:, :, Ny:-1:1));
+    V  = fft(ye, [], 3);
+    f_hat = real(V(:, :, 1:Ny) .* ep.tw_y) .* ep.w_y;
 end
 
-% ---------------------------------------------------------------------------
-% 2D DCT/IDCT using FFT-based row operations — GPU-compatible.
-% DCT-II along spatial dims 2 (x) and 3 (y) of an (m x nx x ny) array.
-% ---------------------------------------------------------------------------
-
-function f_hat = dct2_xy_gpu(f, m, nx, ny)
-    % DCT along x (dim 2): reshape so each row is a length-nx signal
-    f_perm = permute(f, [1, 3, 2]);                          % (m x ny x nx)
-    f_mat  = reshape(f_perm, m*ny, nx);                      % (m*ny x nx)
-    f_mat  = dct_rows_gpu(f_mat);
-    f_hat  = permute(reshape(f_mat, m, ny, nx), [1, 3, 2]);  % (m x nx x ny)
-
-    % DCT along y (dim 3): reshape so each row is a length-ny signal
-    f_mat  = reshape(f_hat, m*nx, ny);                       % (m*nx x ny)
-    f_mat  = dct_rows_gpu(f_mat);
-    f_hat  = reshape(f_mat, m, nx, ny);                      % (m x nx x ny)
-end
-
-function f = idct2_xy_gpu(f_hat, m, nx, ny)
+function f = idct2_xy(f_hat, ep)
     % IDCT along y (dim 3) first
-    f_mat = reshape(f_hat, m*nx, ny);                        % (m*nx x ny)
-    f_mat = idct_rows_gpu(f_mat);
-    f     = reshape(f_mat, m, nx, ny);                       % (m x nx x ny)
+    [m, nx_sz, Ny] = size(f_hat);
+    Z  = f_hat .* ep.w_y;
+    U  = Z .* ep.itw_y;
+    ye = cat(3, U, zeros(m, nx_sz, Ny, 'like', U));
+    f  = real(ifft(ye, [], 3)) * (2*Ny);
+    f  = f(:, :, 1:Ny);
 
     % IDCT along x (dim 2)
-    f_perm = permute(f, [1, 3, 2]);                          % (m x ny x nx)
-    f_mat  = reshape(f_perm, m*ny, nx);                      % (m*ny x nx)
-    f_mat  = idct_rows_gpu(f_mat);
-    f      = permute(reshape(f_mat, m, ny, nx), [1, 3, 2]);  % (m x nx x ny)
+    [m, Nx, ny_sz] = size(f);
+    Z  = f .* ep.w_x;
+    U  = Z .* ep.itw_x;
+    xe = cat(2, U, zeros(m, Nx, ny_sz, 'like', U));
+    f  = real(ifft(xe, [], 2)) * (2*Nx);
+    f  = f(:, 1:Nx, :);
 end
 
 % ---------------------------------------------------------------------------
-% FFT-based orthonormal DCT-II/III along rows.  Equivalent to dct(x')'/idct(x')'
-% but works on gpuArray (no Signal Processing Toolbox dependency).
+% Thomas (TDMA) with (M x nt) layout — coalesced column access on GPU.
+% ep.lower_T, ep.main_T, ep.upper_T are (M x ntm/nt), M = nx*ny.
+% f_hat is (nt x nx x ny); result phi_hat is (nt x nx x ny).
+% ---------------------------------------------------------------------------
+
+function phi_hat = thomas_solve(ep, f_hat, nt, nx, ny)
+    M = nx * ny;
+    d = reshape(permute(f_hat, [2, 3, 1]), M, nt);
+    b = ep.main_T;
+
+    for i = 2:nt
+        w       = ep.lower_T(:, i-1) ./ b(:, i-1);
+        b(:, i) = b(:, i) - w .* ep.upper_T(:, i-1);
+        d(:, i) = d(:, i) - w .* d(:, i-1);
+    end
+
+    phi_r        = zeros(M, nt, 'like', f_hat);
+    phi_r(:, nt) = d(:, nt) ./ b(:, nt);
+    for i = nt-1:-1:1
+        phi_r(:, i) = (d(:, i) - ep.upper_T(:, i) .* phi_r(:, i+1)) ./ b(:, i);
+    end
+
+    phi_hat = permute(reshape(phi_r, nx, ny, nt), [3, 1, 2]);
+end
+
+% ---------------------------------------------------------------------------
+% FFT-based orthonormal DCT-II/III along rows — GPU-compatible.
+% Used only for the 1-D time DCT of the DC spatial mode.
 % ---------------------------------------------------------------------------
 
 function X = dct_rows_gpu(x)
