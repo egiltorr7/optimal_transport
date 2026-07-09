@@ -82,6 +82,18 @@ function ep = precomp_expsemi_proj(problem, vareps)
     ep.main_T  = reshape(permute(ep.main_all,  [2,3,1]), M, nt);
     ep.upper_T = reshape(permute(ep.upper_all, [2,3,1]), M, ntm);
 
+    % --- Precomputed Thomas forward sweep (matches 1D thomas_batch_precomp) ---
+    % Runs the forward elimination on main_T once so thomas_solve only modifies
+    % the RHS, never the diagonal.  Avoids relying on gpuArray copy-on-write
+    % (which can silently corrupt ep.main_T when b = ep.main_T is written to
+    % inside a function that received ep as a by-value struct copy).
+    main_T_mod = ep.main_T;
+    for j = 2:nt
+        w = ep.lower_T(:, j-1) ./ main_T_mod(:, j-1);
+        main_T_mod(:, j) = main_T_mod(:, j) - w .* ep.upper_T(:, j-1);
+    end
+    ep.main_T_mod = main_T_mod;
+
     % --- Precomputed DCT twiddle factors (1 x nx x 1) and (1 x 1 x ny) ---
     % Eliminates exp() recomputation every projection call.
     kx = reshape(0:nx-1, 1, nx, 1);

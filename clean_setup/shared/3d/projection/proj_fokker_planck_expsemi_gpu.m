@@ -148,23 +148,21 @@ function phi_hat = thomas_solve(ep, f_hat, nt, nx, ny, nz)
     M = nx * ny * nz;
 
     % Permute (nt x nx x ny x nz) -> (nx x ny x nz x nt) -> (M x nt)
-    d = reshape(permute(f_hat,       [2, 3, 4, 1]), M, nt);
-    b = reshape(permute(ep.main_all, [2, 3, 4, 1]), M, nt);
+    d       = reshape(permute(f_hat,        [2, 3, 4, 1]), M, nt);
     lower_r = reshape(permute(ep.lower_all, [2, 3, 4, 1]), M, nt-1);
     upper_r = reshape(permute(ep.upper_all, [2, 3, 4, 1]), M, nt-1);
 
-    % Forward sweep
+    % Forward sweep: RHS only — diagonal already precomputed in ep.main_T_mod.
     for i = 2:nt
-        w       = lower_r(:, i-1) ./ b(:, i-1);
-        b(:, i) = b(:, i) - w .* upper_r(:, i-1);
+        w       = lower_r(:, i-1) ./ ep.main_T_mod(:, i-1);
         d(:, i) = d(:, i) - w .* d(:, i-1);
     end
 
     % Back substitution
     phi_r        = zeros(M, nt, 'like', f_hat);
-    phi_r(:, nt) = d(:, nt) ./ b(:, nt);
+    phi_r(:, nt) = d(:, nt) ./ ep.main_T_mod(:, nt);
     for i = nt-1:-1:1
-        phi_r(:, i) = (d(:, i) - upper_r(:, i) .* phi_r(:, i+1)) ./ b(:, i);
+        phi_r(:, i) = (d(:, i) - upper_r(:, i) .* phi_r(:, i+1)) ./ ep.main_T_mod(:, i);
     end
 
     % Permute back (M x nt) -> (nx x ny x nz x nt) -> (nt x nx x ny x nz)

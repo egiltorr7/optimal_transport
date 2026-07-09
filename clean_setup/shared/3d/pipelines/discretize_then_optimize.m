@@ -46,11 +46,12 @@ function result = discretize_then_optimize(cfg, problem)
         problem.lambda_t = gpuArray(problem.lambda_t);
         if isequal(cfg.projection, @proj_fokker_planck_expsemi_gpu)
             ep = problem.expsemi_proj;
-            ep.lower_all = gpuArray(ep.lower_all);
-            ep.main_all  = gpuArray(ep.main_all);
-            ep.upper_all = gpuArray(ep.upper_all);
-            ep.c_vals    = gpuArray(ep.c_vals);
-            ep.phi_vals  = gpuArray(ep.phi_vals);
+            ep.lower_all  = gpuArray(ep.lower_all);
+            ep.main_all   = gpuArray(ep.main_all);
+            ep.upper_all  = gpuArray(ep.upper_all);
+            ep.main_T_mod = gpuArray(ep.main_T_mod);
+            ep.c_vals     = gpuArray(ep.c_vals);
+            ep.phi_vals   = gpuArray(ep.phi_vals);
             ep.tw_x      = gpuArray(ep.tw_x);
             ep.w_x       = gpuArray(ep.w_x);
             ep.iw_x      = gpuArray(ep.iw_x);

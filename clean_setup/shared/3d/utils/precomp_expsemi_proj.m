@@ -71,6 +71,17 @@ function ep = precomp_expsemi_proj(problem, vareps)
 
     ep.main_all(:, 1, 1, 1) = 1;
 
+    % --- Precomputed Thomas forward sweep ---
+    M = nx * ny * nz;
+    lower_r = reshape(permute(ep.lower_all, [2, 3, 4, 1]), M, nt-1);
+    main_r  = reshape(permute(ep.main_all,  [2, 3, 4, 1]), M, nt);
+    upper_r = reshape(permute(ep.upper_all, [2, 3, 4, 1]), M, nt-1);
+    for j = 2:nt
+        w = lower_r(:, j-1) ./ main_r(:, j-1);
+        main_r(:, j) = main_r(:, j) - w .* upper_r(:, j-1);
+    end
+    ep.main_T_mod = main_r;
+
     % --- Precomputed DCT twiddle factors ---
     kx = reshape(0:nx-1, 1, nx, 1, 1);
     ep.tw_x  = exp(-1i * pi * kx / (2*nx));
