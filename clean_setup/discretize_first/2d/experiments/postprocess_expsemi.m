@@ -58,8 +58,8 @@ files = files(valid);   f_eps = f_eps(valid);   f_NT = f_NT(valid);   f_NX = f_N
 %% -------------------------------------------------------------------------
 %  Optional filter — set to [] to process all files
 % -------------------------------------------------------------------------
-FILTER_NT  = [256];    % e.g. 64
-FILTER_NX  = [256];    % e.g. 32
+FILTER_NT  = [64];    % e.g. 64
+FILTER_NX  = [128];    % e.g. 32
 FILTER_EPS = [1e-8];    % e.g. 1.0
 
 mask = true(numel(files), 1);
@@ -190,6 +190,43 @@ for k = 1:numel(files)
         d.NT, d.NX, d.eps_i, median(it)*1e3), 'FontSize', FS);
     set(gca,'FontSize',FS,'Box','on','TickDir','out'); grid on;
     savefig_both(fig, fig_dir, ['iter_time_' tag]);
+
+    %% --- (5) Density along diagonal x=y ------------------------------------
+    nx_d = d.nx;   ny_d = d.ny;   nt_d = d.nt;
+    nd   = min(nx_d, ny_d);
+    x_diag = ((1:nd) - 0.5) * d.dx;   % spatial coord along x=y
+
+    rho_es_diag  = zeros(nt_d, nd);
+    rho_ref_diag = zeros(nt_d, nd);
+    for ii = 1:nd
+        rho_es_diag(:,  ii) = d.rho_es_cc(:,  ii, ii);
+        rho_ref_diag(:, ii) = d.rho_ref_cc(:, ii, ii);
+    end
+
+    t_fracs_d = [0.1, 0.25, 0.5, 0.75, 0.9];
+    ns_d      = numel(t_fracs_d);
+    t_cc_d    = ((1:nt_d)' - 0.5) * d.dt;
+    clrs      = cool(ns_d);
+
+    fig = figure('Units','centimeters','Position',[2 2 14 8]);
+    hold on;
+    for s = 1:ns_d
+        k_idx = max(1, round(t_fracs_d(s) * nt_d));
+        t_k   = t_cc_d(k_idx);
+        plot(x_diag, rho_ref_diag(k_idx, :), '--', 'Color', clrs(s,:), ...
+            'LineWidth', LW, 'HandleVisibility', 'off');
+        plot(x_diag, rho_es_diag(k_idx, :),  '-',  'Color', clrs(s,:), ...
+            'LineWidth', LW, 'DisplayName', sprintf('$t=%.2f$', t_k));
+    end
+    plot(nan, nan, 'k-',  'LineWidth', LW, 'DisplayName', 'ExpSemi');
+    plot(nan, nan, 'k--', 'LineWidth', LW, 'DisplayName', sprintf('Ref (%s)', ref_label));
+    xlabel('$x$  (along $x=y$)', 'FontSize', FS);
+    ylabel('$\rho$', 'FontSize', FS);
+    title(sprintf('Slice $x=y$  ($\\varepsilon=%.4g$,  $N_T=%d$,  $N_x=%d$)', ...
+        d.eps_i, d.NT, d.NX), 'FontSize', FS, 'Interpreter', 'latex');
+    legend('Location', 'best', 'FontSize', FS-1, 'Box', 'off');
+    set(gca, 'FontSize', FS, 'Box', 'on', 'TickDir', 'out');  grid on;
+    savefig_both(fig, fig_dir, ['diag_slice_' tag]);
 
     close all;
 end
