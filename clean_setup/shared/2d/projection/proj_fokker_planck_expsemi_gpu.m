@@ -109,7 +109,7 @@ end
 function f = idct2_xy(f_hat, ep)
     % IDCT along y (dim 3) first
     [m, nx_sz, Ny] = size(f_hat);
-    Z  = f_hat .* ep.w_y;
+    Z  = f_hat .* ep.iw_y;
     U  = Z .* ep.itw_y;
     ye = cat(3, U, zeros(m, nx_sz, Ny, 'like', U));
     f  = real(ifft(ye, [], 3)) * (2*Ny);
@@ -117,7 +117,7 @@ function f = idct2_xy(f_hat, ep)
 
     % IDCT along x (dim 2)
     [m, Nx, ny_sz] = size(f);
-    Z  = f .* ep.w_x;
+    Z  = f .* ep.iw_x;
     U  = Z .* ep.itw_x;
     xe = cat(2, U, zeros(m, Nx, ny_sz, 'like', U));
     f  = real(ifft(xe, [], 2)) * (2*Nx);

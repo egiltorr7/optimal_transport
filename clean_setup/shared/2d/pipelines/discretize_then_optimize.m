@@ -115,9 +115,11 @@ function result = discretize_then_optimize(cfg, problem)
                 problem.expsemi_proj.upper_T = gpuArray(problem.expsemi_proj.upper_T);
                 problem.expsemi_proj.tw_x    = gpuArray(problem.expsemi_proj.tw_x);
                 problem.expsemi_proj.w_x     = gpuArray(problem.expsemi_proj.w_x);
+                problem.expsemi_proj.iw_x    = gpuArray(problem.expsemi_proj.iw_x);
                 problem.expsemi_proj.itw_x   = gpuArray(problem.expsemi_proj.itw_x);
                 problem.expsemi_proj.tw_y    = gpuArray(problem.expsemi_proj.tw_y);
                 problem.expsemi_proj.w_y     = gpuArray(problem.expsemi_proj.w_y);
+                problem.expsemi_proj.iw_y    = gpuArray(problem.expsemi_proj.iw_y);
                 problem.expsemi_proj.itw_y   = gpuArray(problem.expsemi_proj.itw_y);
             end
         end

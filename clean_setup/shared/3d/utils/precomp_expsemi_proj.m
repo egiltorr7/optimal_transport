@@ -75,15 +75,18 @@ function ep = precomp_expsemi_proj(problem, vareps)
     kx = reshape(0:nx-1, 1, nx, 1, 1);
     ep.tw_x  = exp(-1i * pi * kx / (2*nx));
     ep.w_x   = reshape([1/sqrt(nx), sqrt(2/nx)*ones(1,nx-1)]/2, 1, nx, 1, 1);
+    ep.iw_x  = 2 * ep.w_x;
     ep.itw_x = conj(ep.tw_x);
 
     ky = reshape(0:ny-1, 1, 1, ny, 1);
     ep.tw_y  = exp(-1i * pi * ky / (2*ny));
     ep.w_y   = reshape([1/sqrt(ny), sqrt(2/ny)*ones(1,ny-1)]/2, 1, 1, ny, 1);
+    ep.iw_y  = 2 * ep.w_y;
     ep.itw_y = conj(ep.tw_y);
 
     kz = reshape(0:nz-1, 1, 1, 1, nz);
     ep.tw_z  = exp(-1i * pi * kz / (2*nz));
     ep.w_z   = reshape([1/sqrt(nz), sqrt(2/nz)*ones(1,nz-1)]/2, 1, 1, 1, nz);
+    ep.iw_z  = 2 * ep.w_z;
     ep.itw_z = conj(ep.tw_z);
 end

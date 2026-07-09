@@ -20,7 +20,7 @@ clear; close all;
 
 base_dir = fileparts(mfilename('fullpath'));
 dat_dir  = fullfile(base_dir, '..', 'results', 'data');
-fig_dir  = fullfile(base_dir, '..', 'results', 'figures');
+fig_dir  = fullfile(base_dir, '..', 'results', 'figures','paper');
 if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 
 set(groot, 'defaultTextInterpreter',          'latex');
@@ -54,6 +54,19 @@ for k = 1:NF
 end
 valid = ~isnan(f_eps);
 files = files(valid);   f_eps = f_eps(valid);   f_NT = f_NT(valid);   f_NX = f_NX(valid);
+
+%% -------------------------------------------------------------------------
+%  Optional filter — set to [] to process all files
+% -------------------------------------------------------------------------
+FILTER_NT  = [256];    % e.g. 64
+FILTER_NX  = [256];    % e.g. 32
+FILTER_EPS = [1e-8];    % e.g. 1.0
+
+mask = true(numel(files), 1);
+if ~isempty(FILTER_NT),  mask = mask & (f_NT == FILTER_NT);                    end
+if ~isempty(FILTER_NX),  mask = mask & (f_NX == FILTER_NX);                    end
+if ~isempty(FILTER_EPS), mask = mask & (abs(f_eps - FILTER_EPS) < 1e-12);      end
+files = files(mask);   f_eps = f_eps(mask);   f_NT = f_NT(mask);   f_NX = f_NX(mask);
 
 EPS_VALS  = unique(f_eps);
 GRID_VALS = unique(f_NX);   % NX values; NT determined by file
@@ -99,7 +112,7 @@ for k = 1:numel(files)
     set(gca,'FontSize',FS,'Box','on','TickDir','out'); grid on;
 
     sgtitle(sprintf('ADMM convergence  ($\\varepsilon=%.4g$,  $N_T=%d$,  $N_x=%d$)', ...
-        d.eps_i, d.NT, d.NX), 'FontSize', FS+1);
+        d.eps_i, d.NT, d.NX), 'FontSize', FS+1, 'Interpreter', 'latex');
     savefig_both(fig, fig_dir, ['admm_conv_' tag]);
 
     %% --- (2) Error vs time ----------------------------------------------
@@ -132,7 +145,7 @@ for k = 1:numel(files)
 
     ref_label = d.ref_type;
     sgtitle(sprintf('Error vs time  ($\\varepsilon=%.4g$,  $N_T=%d$,  $N_x=%d$,  ref: %s)', ...
-        d.eps_i, d.NT, d.NX, ref_label), 'FontSize', FS+1);
+        d.eps_i, d.NT, d.NX, ref_label), 'FontSize', FS+1, 'Interpreter', 'latex');
     savefig_both(fig, fig_dir, ['err_vs_t_' tag]);
 
     %% --- (3) Density snapshots ------------------------------------------
@@ -164,7 +177,7 @@ for k = 1:numel(files)
         set(ax,'FontSize',FS-1,'TickDir','out');
     end
     sgtitle(sprintf('Density ($\\varepsilon=%.4g$,  $N_T=%d$,  $N_x=%d$)', ...
-        d.eps_i, d.NT, d.NX), 'FontSize', FS+1);
+        d.eps_i, d.NT, d.NX), 'FontSize', FS+1, 'Interpreter', 'latex');
     savefig_both(fig, fig_dir, ['density_' tag]);
 
     %% --- (4) Iter time histogram ----------------------------------------
@@ -230,7 +243,7 @@ for k = 1:numel(sfiles)
     title('(c) Iterations vs $\varepsilon$','FontSize',FS);
     set(gca,'FontSize',FS,'Box','on','TickDir','out'); grid on;
 
-    sgtitle(sprintf('$N_T=%d$,  $N_x=N_y=%d$', s.NT, s.NX), 'FontSize', FS+1);
+    sgtitle(sprintf('$N_T=%d$,  $N_x=N_y=%d$', s.NT, s.NX), 'FontSize', FS+1, 'Interpreter', 'latex');
     savefig_both(fig, fig_dir, ['sweep_' tag]);
     close all;
 end
@@ -289,7 +302,7 @@ for ei = 1:numel(EPS_VALS)
     title('(b) Cost vs grid size','FontSize',FS);
     set(gca,'FontSize',FS,'Box','on','TickDir','out'); grid on;
 
-    sgtitle(sprintf('Grid refinement  ($\\varepsilon=%.4g$)', eps_i), 'FontSize', FS+1);
+    sgtitle(sprintf('Grid refinement  ($\\varepsilon=%.4g$)', eps_i), 'FontSize', FS+1, 'Interpreter', 'latex');
     savefig_both(fig, fig_dir, sprintf('refine_eps%g', eps_i));
     close all;
 end
@@ -301,7 +314,7 @@ fprintf('\nDone.  Figures saved to %s\n', fig_dir);
 %% =========================================================================
 
 function savefig_both(fig, fig_dir, name)
-    print(fig, fullfile(fig_dir, [name '.pdf']), '-dpdf', '-painters');
+    print(fig, fullfile(fig_dir, [name '.pdf']), '-dpdf', '-painters', '-bestfit');
     saveas(fig,  fullfile(fig_dir, [name '.png']));
 end
 

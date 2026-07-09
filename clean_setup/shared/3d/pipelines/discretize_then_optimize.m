@@ -53,12 +53,15 @@ function result = discretize_then_optimize(cfg, problem)
             ep.phi_vals  = gpuArray(ep.phi_vals);
             ep.tw_x      = gpuArray(ep.tw_x);
             ep.w_x       = gpuArray(ep.w_x);
+            ep.iw_x      = gpuArray(ep.iw_x);
             ep.itw_x     = gpuArray(ep.itw_x);
             ep.tw_y      = gpuArray(ep.tw_y);
             ep.w_y       = gpuArray(ep.w_y);
+            ep.iw_y      = gpuArray(ep.iw_y);
             ep.itw_y     = gpuArray(ep.itw_y);
             ep.tw_z      = gpuArray(ep.tw_z);
             ep.w_z       = gpuArray(ep.w_z);
+            ep.iw_z      = gpuArray(ep.iw_z);
             ep.itw_z     = gpuArray(ep.itw_z);
             problem.expsemi_proj = ep;
         end
