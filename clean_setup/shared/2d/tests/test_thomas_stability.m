@@ -7,13 +7,14 @@
 %
 % Run this script standalone — no problem struct needed.
 
-addpath(genpath(fullfile(fileparts(mfilename('fullpath')), '..', '..', '..')));
+% Add 2D utils first so precomp_banded_proj resolves to the 2D version
+addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
 
 %% Parameters to sweep
-nt_vals      = [16, 32, 64];
+nt_vals      = [16, 32, 64, 128, 256];
 eps_dt_vals  = [0.1, 0.5, 1.0, 2.0, 5.0, 10.0];
-nx           = 16;   % fixed spatial grid for the sweep
-ny           = 16;
+nx           = 128;   % fixed spatial grid for the sweep
+ny           = 128;
 
 fprintf('%-6s  %-8s  %-14s  %-14s  %-14s\n', ...
     'nt', 'eps/dt', 'min_pivot', 'min_eig', 'dd_margin_last');
@@ -48,6 +49,7 @@ for nt = nt_vals
 
         for kx = 1:nx
             for ky = 1:ny
+                if kx == 1 && ky == 1, continue; end   % DC mode handled via DCT-t, skip
                 a = bp.lower_all(:, kx, ky);   % (nt-1 x 1)
                 b = bp.main_all(:,  kx, ky);   % (nt   x 1)
                 c = bp.upper_all(:, kx, ky);   % (nt-1 x 1)
@@ -86,12 +88,13 @@ problem.lambda_t = (2 - 2*cos(pi * dt * (0:ntm)')) / dt^2;
 
 bp = precomp_banded_proj(problem, vareps);
 
-min_pivot_map = zeros(nx, ny);
-min_eig_map   = zeros(nx, ny);
-dd_map        = zeros(nx, ny);
+min_pivot_map = nan(nx, ny);
+min_eig_map   = nan(nx, ny);
+dd_map        = nan(nx, ny);
 
 for kx = 1:nx
     for ky = 1:ny
+        if kx == 1 && ky == 1, continue; end
         a = bp.lower_all(:, kx, ky);
         b = bp.main_all(:,  kx, ky);
         c = bp.upper_all(:, kx, ky);

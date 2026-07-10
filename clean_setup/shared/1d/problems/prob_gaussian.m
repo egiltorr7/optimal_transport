@@ -6,7 +6,7 @@ function prob = prob_gaussian()
     prob.name      = 'gaussian';
     prob.mu0       = 1/3;
     prob.mu1       = 2/3;
-    prob.sigma     = 0.15;
+    prob.sigma     = 0.05;
     prob.rho0_func = @(xx) Normal(xx, prob.mu0, prob.sigma);
     prob.rho1_func = @(xx) Normal(xx, prob.mu1, prob.sigma);
 end

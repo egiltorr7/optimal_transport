@@ -61,6 +61,7 @@ is the core computational challenge discussed here.
 
 %------------------------------------------------------------------------------
 \section{The FP Projection and the Linear System $AA^* \phi = f$}
+\label{sec:structure}
 %------------------------------------------------------------------------------
 
 The FP projection is formulated via its dual potential $\phi \in \RR^{n_t \times n_x \times n_y}$.
@@ -122,6 +123,166 @@ when $\eps \cdot n_t > T$.
 Here $\lxy = 0$ and $T_{1,1} = M_0$, which is singular (it has a constant null vector
 since $M_0$ represents a second time-difference with no restoring term).
 This mode is handled separately by a 1D DCT in time, using the eigenvalues $\lambda_t(k)$.
+
+%------------------------------------------------------------------------------
+\section{Positive Definiteness of $T_{k_x,k_y}$ for Non-DC Modes}
+\label{sec:pd}
+%------------------------------------------------------------------------------
+
+\textbf{Theorem.} For every non-DC spatial mode, i.e.\ $\lxy > 0$, the matrix
+$T_{k_x,k_y}$ is symmetric positive definite (SPD).
+
+\medskip
+\noindent
+\textbf{Symmetry.}
+$T$ is symmetric because each building block is symmetric:
+$M_0 = D_t^\phi (D_t^\phi)^\top$ and $M_2 = \eps^2\, I_t^\phi (I_t^\phi)^\top$
+are Gram matrices (hence symmetric PSD), and $\mathrm{diag}(d)$ is diagonal.
+
+\medskip
+\noindent
+\textbf{Notation.} Let $n = n_t$ and recall from Section~\ref{sec:structure} that
+$T$ has constant off-diagonal
+\[
+  c \;=\; \frac{\lxy^2 \eps^2}{4} - \frac{1}{\dt^2}
+\]
+and three distinct diagonal values:
+\begin{align*}
+  d_1   &= \frac{1}{\dt^2} + \lxy\!\left(1+\frac{\eps}{\dt}\right) + \frac{\lxy^2\eps^2}{4}, \\
+  D     &= \frac{2}{\dt^2} + \lxy + \frac{\lxy^2\eps^2}{2},
+            \quad \text{(rows } 2,\ldots,n-1\text{)}, \\
+  d_n   &= \frac{1}{\dt^2} + \lxy\!\left(1-\frac{\eps}{\dt}\right) + \frac{\lxy^2\eps^2}{4}.
+\end{align*}
+Let $T_1 = T[1:n-1,\,1:n-1]$ denote the leading $(n-1)\times(n-1)$ principal submatrix.
+The proof proceeds in two steps: first show $T_1$ is PD, then show the Schur complement
+$S > 0$.
+
+%--------------------------------------
+\subsection{Step 1: $T_1$ is PD via Gershgorin}
+%--------------------------------------
+
+\textbf{Gershgorin Circle Theorem.}
+Every eigenvalue $\lambda$ of a real symmetric matrix $A$ satisfies
+$\lambda \in [A_{ii} - R_i,\; A_{ii} + R_i]$ for some row $i$,
+where $R_i = \sum_{j \neq i} |A_{ij}|$.
+In particular, if $A_{ii} - R_i > 0$ for all $i$, then all eigenvalues are positive
+and $A$ is PD.
+
+\medskip
+$T_1$ is tridiagonal with constant off-diagonal $c$ and diagonals
+$d_1$ (row 1), $D$ (rows $2,\ldots,n-2$), and $D$ (row $n-1$, since it is an interior row of $T$).
+The Gershgorin radii are $R_1 = |c|$, $R_k = 2|c|$ for interior rows, and $R_{n-1} = |c|$
+(the right off-diagonal of row $n-1$ falls outside $T_1$).
+
+\medskip\noindent
+We verify $d_i - R_i > 0$ in two cases depending on the sign of $c$:
+
+\begin{itemize}
+  \item \textbf{Case A} ($\lxy\eps \geq 2/\dt$, so $c \geq 0$):
+    \[
+      d_1 - |c| = \frac{2}{\dt^2} + \lxy\!\left(1+\frac{\eps}{\dt}\right) > 0,
+      \qquad
+      D - 2|c|  = \frac{4}{\dt^2} + \lxy > 0.
+    \]
+  \item \textbf{Case B} ($\lxy\eps < 2/\dt$, so $c < 0$):
+    \[
+      d_1 - |c| = \lxy\!\left(1+\frac{\eps}{\dt}\right) + \frac{\lxy^2\eps^2}{2} > 0
+      \quad \text{(for } \lxy > 0\text{)},
+      \qquad
+      D - 2|c|  = \lxy + \lxy^2\eps^2 > 0.
+    \]
+\end{itemize}
+In both cases all Gershgorin margins are strictly positive, so $T_1$ is SPD. \qed
+
+%--------------------------------------
+\subsection{Step 2: Schur Complement $S > 0$}
+%--------------------------------------
+
+\textbf{Block characterisation of PD.}
+Partition $T$ as
+\[
+  T = \begin{pmatrix} T_1 & b \\ b^\top & d_n \end{pmatrix},
+  \qquad b = c\, e_{n-1} \in \RR^{n-1},
+\]
+where $e_{n-1}$ is the $(n-1)$-th standard basis vector (since $T$ is tridiagonal,
+only the last entry of $b$ is nonzero).
+The Schur complement of $T_1$ is
+\[
+  S \;=\; d_n - b^\top T_1^{-1} b \;=\; d_n - c^2\,(T_1^{-1})_{n-1,n-1}.
+\]
+By completing the square, for any $x = (y, z)^\top$ with $y \in \RR^{n-1}$, $z \in \RR$:
+\[
+  x^\top T x \;=\; (y + z T_1^{-1}b)^\top T_1\,(y + z T_1^{-1}b) \;+\; z^2 S.
+\]
+Since both terms are non-negative and the first is zero only when $y = -z T_1^{-1}b$,
+we conclude: \emph{$T$ is PD if and only if $T_1$ is PD and $S > 0$}.
+
+\medskip\noindent
+\textbf{Expressing $S$ via Thomas pivots.}
+Let $p_1, p_2, \ldots, p_{n-1}$ be the Thomas pivots of $T_1$:
+\[
+  p_1 = d_1, \qquad p_k = D - \frac{c^2}{p_{k-1}}, \quad k = 2,\ldots, n-1.
+\]
+By cofactor expansion (expanding along the last row inductively):
+\[
+  \det(T[1:k]) = p_1 \cdot p_2 \cdots p_k.
+\]
+By Cramer's rule applied to the diagonal entry:
+\[
+  (T_1^{-1})_{n-1,n-1}
+  = \frac{\det(T[1:n-2])}{\det(T_1)}
+  = \frac{p_1 \cdots p_{n-2}}{p_1 \cdots p_{n-1}}
+  = \frac{1}{p_{n-1}}.
+\]
+Therefore:
+\[
+  S \;=\; d_n - \frac{c^2}{p_{n-1}}.
+\]
+
+\medskip\noindent
+\textbf{Lower bound on Thomas pivots.}
+We show $p_k \geq d_1$ for all $k = 1, \ldots, n-1$ by induction.
+
+\emph{Base case:} $p_1 = d_1$. \checkmark
+
+\emph{Inductive step:} Assume $p_{k-1} \geq d_1$.
+Then $p_k = D - c^2/p_{k-1} \geq D - c^2/d_1$.
+It suffices to show $D - c^2/d_1 \geq d_1$, equivalently $d_1(D - d_1) \geq c^2$.
+
+Three algebraic identities (verified by direct expansion):
+\begin{align}
+  d_1     &= \left(\frac{1}{\dt} + \frac{\lxy\eps}{2}\right)^{\!2} + \lxy, \label{eq:d1}\\
+  D - d_1 &= \left(\frac{\lxy\eps}{2} - \frac{1}{\dt}\right)^{\!2},         \label{eq:Dd1}\\
+  c       &= \left(\frac{\lxy\eps}{2} - \frac{1}{\dt}\right)
+             \left(\frac{\lxy\eps}{2} + \frac{1}{\dt}\right).                \label{eq:cfact}
+\end{align}
+Using \eqref{eq:d1} and \eqref{eq:Dd1}--\eqref{eq:cfact}:
+\[
+  d_1(D - d_1)
+  = \underbrace{\left[\left(\frac{1}{\dt}+\frac{\lxy\eps}{2}\right)^{\!2}+\lxy\right]}_{=\,d_1}
+    \cdot
+    \underbrace{\left(\frac{\lxy\eps}{2}-\frac{1}{\dt}\right)^{\!2}}_{=\,D-d_1}
+  \;\geq\;
+    \left(\frac{1}{\dt}+\frac{\lxy\eps}{2}\right)^{\!2}
+    \left(\frac{\lxy\eps}{2}-\frac{1}{\dt}\right)^{\!2}
+  = c^2.
+\]
+So $p_k \geq d_1 > 0$ for all $k$. \qed
+
+\medskip\noindent
+\textbf{Conclusion.}
+Since $p_{n-1} \geq d_1$:
+\[
+  S \;=\; d_n - \frac{c^2}{p_{n-1}}
+    \;\geq\; d_n - \frac{c^2}{d_1}
+    \;=\; \frac{d_1 d_n - c^2}{d_1}.
+\]
+The numerator satisfies (verified by direct expansion):
+\[
+  d_1 d_n - c^2 \;=\; \lxy \cdot D \;>\; 0
+  \qquad (\text{since } \lxy > 0 \text{ and } D > 0).
+\]
+Therefore $S \geq \lxy D / d_1 > 0$, and by the block characterisation above, $T$ is SPD. \qed
 
 %------------------------------------------------------------------------------
 \section{Solver Options Explored}
@@ -302,7 +463,7 @@ The quantity actually used in the solve is the \emph{Schur complement}
 \]
 where $v = T_1^{-1}(u_{n_t-1}\,e_{n_t-1})$ is the spike vector.
 $S > 0$ follows from positive definiteness of $T$ for $\lxy > 0$
-(since $T = AA^*$ has no null vectors at non-DC modes), which implies
+(proved in Section~\ref{sec:pd}), which implies
 $S > 0$ as the Schur complement of the positive-definite block $T_1$.
 
 \textbf{When does Thomas fail?}
