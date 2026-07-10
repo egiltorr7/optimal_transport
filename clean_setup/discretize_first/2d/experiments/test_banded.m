@@ -45,17 +45,19 @@ prob_def.rho1_func = @(xx, yy) Normal2d(xx, yy, MU1(1), MU1(2), SIGMA);
 %% -------------------------------------------------------------------------
 %  Grid refinement levels:  [NT, NX]  (NY = NX always)
 % -------------------------------------------------------------------------
-GRIDS = [ 64,  32 ; ...
-          128,  64 ; ...
-          256, 128 ; ...
-          256, 256 ];
+% GRIDS = [ 64,  32 ; ...
+%          128,  64 ; ...
+%          256, 128 ; ...
+%          256, 256 ];
+GRIDS = [64,128];
 
 N_GRIDS = size(GRIDS, 1);
 
 %% -------------------------------------------------------------------------
 %  Epsilon sweep and threshold
 % -------------------------------------------------------------------------
-EPS_SWEEP  = [0.01, 0.1, 1.0, 10.0, 100.0];
+% EPS_SWEEP  = [0.01, 0.1, 1.0, 10.0, 100.0];
+EPS_SWEEP = [1e-8];
 EPS_THRESH = 5e-3;   % below: analytical reference; above: Sinkhorn
 NE         = numel(EPS_SWEEP);
 
@@ -67,6 +69,8 @@ TOL_WORK   = 1e-8;
 cfg_bd            = cfg_ladmm_gaussian();
 cfg_bd.max_iter   = 10000;
 cfg_bd.tol        = TOL_WORK;
+cfg_bd.gamma      = 0.1;
+cfg_bd.tau        = 0.11;
 cfg_bd.use_gpu    = true;
 cfg_bd.gpu_device = 1;
 cfg_bd.print_every = 2000;
