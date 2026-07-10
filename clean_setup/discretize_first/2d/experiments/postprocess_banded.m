@@ -62,7 +62,7 @@ files = files(valid);   f_eps = f_eps(valid);   f_NT = f_NT(valid);   f_NX = f_N
 % -------------------------------------------------------------------------
 FILTER_NT  = [64];    % e.g. 64
 FILTER_NX  = [128];    % e.g. 32
-FILTER_EPS = [1e-8];    % e.g. 1.0
+FILTER_EPS = [0.01];    % e.g. 1.0
 
 mask = true(numel(files), 1);
 if ~isempty(FILTER_NT),  mask = mask & (f_NT == FILTER_NT);                    end

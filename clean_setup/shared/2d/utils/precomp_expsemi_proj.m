@@ -49,9 +49,11 @@ function ep = precomp_expsemi_proj(problem, vareps)
     c_vals     = exp(-alpha_vals);    % (1 x nx x ny)
 
     % ETD weight: phi = (1 - exp(-alpha)) / alpha, with phi(0) = 1
+    % Computed via expm1 to avoid catastrophic cancellation in 1 - exp(-alpha)
+    % for small alpha (guarantees phi < 1 exactly, as the math requires).
     phi_vals       = ones(1, nx, ny);
     nz             = alpha_vals > 1e-14;
-    phi_vals(nz)   = (1 - c_vals(nz)) ./ alpha_vals(nz);
+    phi_vals(nz)   = -expm1(-alpha_vals(nz)) ./ alpha_vals(nz);
 
     ep.c_vals   = c_vals;
     ep.phi_vals = phi_vals;
