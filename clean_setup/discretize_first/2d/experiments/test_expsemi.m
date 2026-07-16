@@ -41,20 +41,19 @@ prob_def.rho1_func = @(xx, yy) Normal2d(xx, yy, MU1(1), MU1(2), SIGMA);
 %% -------------------------------------------------------------------------
 %  Grid refinement levels:  [NT, NX]  (NY = NX always)
 % -------------------------------------------------------------------------
-% GRIDS = [ 64,  32 ; ...
-%          128,  64 ; ...
-%          256, 128 ; ...
-%          256, 256 ];
+% GRIDS = [128,  64 ; ...
+%           256, 128 ; ...
+%           256, 256 ];
 
-GRIDS = [64, 128];
+GRIDS = [512, 256];
 
 N_GRIDS = size(GRIDS, 1);
 
 %% -------------------------------------------------------------------------
 %  Epsilon sweep and threshold
 % -------------------------------------------------------------------------
-%% EPS_SWEEP  = [1e-8, 1e-4, 0.01, 0.1, 1.0, 10.0, 100.0];
-EPS_SWEEP  = [1e-8];
+EPS_SWEEP  = [1e-8, 1e-4, 0.01, 0.1, 1.0, 10.0, 100.0];
+%EPS_SWEEP  = [1e-8];
 EPS_THRESH = 5e-3;   % below: analytical reference; above: Sinkhorn
 NE         = numel(EPS_SWEEP);
 
@@ -71,7 +70,7 @@ cfg_es.tol        = TOL_WORK;
 cfg_es.use_gpu    = true;
 cfg_es.gpu_device = 1;
 cfg_es.print_every = 2000;
-cfg_es.projection  = @proj_fokker_planck_expsemi;
+cfg_es.projection  = @proj_fokker_planck_expsemi_gpu;
 
 %% =========================================================================
 %  Main loop: grid levels -> epsilon
