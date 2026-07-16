@@ -19,7 +19,7 @@ clear; close all;
 run(fullfile(fileparts(mfilename('fullpath')), '..', 'setup_paths.m'));
 clear functions
 
-dat_dir = fullfile(fileparts(mfilename('fullpath')), '..', 'results', 'data');
+dat_dir = fullfile(fileparts(mfilename('fullpath')), '..', 'results', 'data', 'gaussian');
 if ~exist(dat_dir, 'dir'), mkdir(dat_dir); end
 
 %% -------------------------------------------------------------------------

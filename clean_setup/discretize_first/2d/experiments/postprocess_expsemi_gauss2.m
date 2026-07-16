@@ -1,7 +1,11 @@
-% POSTPROCESS_EXPSEMI  Post-process data from test_expsemi.m.
+% POSTPROCESS_EXPSEMI_GAUSS2  Post-process data from test_expsemi_gauss2.m.
+%
+%   Gaussian-to-Gaussian SB with DIFFERENT means AND different standard
+%   deviations at the two endpoints (sigma0 != sigma1). Mirrors
+%   postprocess_expsemi.m exactly; see that file for the full figure list.
 %
 %   Run this locally after copying results/data/ from the server.
-%   Reads all expsemi2d_gaussian_*.mat files found in dat_dir and produces:
+%   Reads all expsemi2d_gauss2_*.mat files found in dat_dir and produces:
 %
 %   Per-run figures  (one per (NT,NX,eps)):
 %     admm_conv_*      -- res_x / res_y / res_primal vs iteration
@@ -19,8 +23,8 @@
 clear; close all;
 
 base_dir = fileparts(mfilename('fullpath'));
-dat_dir  = fullfile(base_dir, '..', 'results', 'data', 'gaussian');
-fig_dir  = fullfile(base_dir, '..', 'results', 'figures','paper', 'gaussian');
+dat_dir  = fullfile(base_dir, '..', 'results', 'data', 'gauss2');
+fig_dir  = fullfile(base_dir, '..', 'results', 'figures','paper', 'gauss2');
 if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 
 set(groot, 'defaultTextInterpreter',          'latex');
@@ -32,7 +36,7 @@ FS = 11;   LW = 1.5;   MS = 6;
 %% -------------------------------------------------------------------------
 %  Discover available files
 % -------------------------------------------------------------------------
-files = dir(fullfile(dat_dir, 'expsemi2d_gaussian_eps*_nt*_nx*.mat'));
+files = dir(fullfile(dat_dir, 'expsemi2d_gauss2_eps*_nt*_nx*.mat'));
 if isempty(files)
     error('No data files found in %s', dat_dir);
 end
@@ -44,7 +48,7 @@ f_NT  = nan(NF,1);
 f_NX  = nan(NF,1);
 for k = 1:NF
     tok = regexp(files(k).name, ...
-        'expsemi2d_gaussian_eps([\d.e+\-]+)_nt(\d+)_nx(\d+)', 'tokens');
+        'expsemi2d_gauss2_eps([\d.e+\-]+)_nt(\d+)_nx(\d+)', 'tokens');
     if ~isempty(tok)
         t = tok{1};
         f_eps(k) = str2double(t{1});
@@ -113,7 +117,7 @@ for k = 1:numel(files)
 
     sgtitle(sprintf('ADMM convergence  ($\\varepsilon=%.4g$,  $N_T=%d$,  $N_x=%d$)', ...
         d.eps_i, d.NT, d.NX), 'FontSize', FS+1, 'Interpreter', 'latex');
-    savefig_both(fig, fig_dir, ['admm_conv_' tag]);
+    savefig_both(fig, fig_dir, ['admm_conv_gauss2_' tag]);
 
     %% --- (2) Error vs time ----------------------------------------------
     fig = figure('Units','centimeters','Position',[2 2 16 7]);
@@ -146,12 +150,12 @@ for k = 1:numel(files)
     ref_label = d.ref_type;
     sgtitle(sprintf('Error vs time  ($\\varepsilon=%.4g$,  $N_T=%d$,  $N_x=%d$,  ref: %s)', ...
         d.eps_i, d.NT, d.NX, ref_label), 'FontSize', FS+1, 'Interpreter', 'latex');
-    savefig_both(fig, fig_dir, ['err_vs_t_' tag]);
+    savefig_both(fig, fig_dir, ['err_vs_t_gauss2_' tag]);
 
     %% --- (3) Density snapshots: ExpSemi only, t=0 (rho0) to t=1 (rho1) ---
-    rho0_2d = normal2d_density(d.xx, d.yy, d.MU0(1), d.MU0(2), d.SIGMA);
+    rho0_2d = normal2d_density(d.xx, d.yy, d.MU0(1), d.MU0(2), d.SIGMA0);
     rho0_2d = rho0_2d / (sum(rho0_2d(:)) * d.dx * d.dy);
-    rho1_2d = normal2d_density(d.xx, d.yy, d.MU1(1), d.MU1(2), d.SIGMA);
+    rho1_2d = normal2d_density(d.xx, d.yy, d.MU1(1), d.MU1(2), d.SIGMA1);
     rho1_2d = rho1_2d / (sum(rho1_2d(:)) * d.dx * d.dy);
 
     % Build cell indices via exact integer mirroring (k_hi = nt+1-k_lo) rather
@@ -197,7 +201,7 @@ for k = 1:numel(files)
     end
     sgtitle(sprintf('Density ($\\varepsilon=%.4g$,  $N_T=%d$,  $N_x=%d$)', ...
         d.eps_i, d.NT, d.NX), 'FontSize', FS+1, 'Interpreter', 'latex');
-    savefig_both(fig, fig_dir, ['density_' tag]);
+    savefig_both(fig, fig_dir, ['density_gauss2_' tag]);
 
     %% --- (4) Iter time histogram ----------------------------------------
     it = d.iter_times(1:d.iters_es);
@@ -208,7 +212,7 @@ for k = 1:numel(files)
     title(sprintf('Iter time  ($N_T=%d$,  $N_x=%d$,  $\\varepsilon=%.4g$,  median=%.1fms)', ...
         d.NT, d.NX, d.eps_i, median(it)*1e3), 'FontSize', FS);
     set(gca,'FontSize',FS,'Box','on','TickDir','out'); grid on;
-    savefig_both(fig, fig_dir, ['iter_time_' tag]);
+    savefig_both(fig, fig_dir, ['iter_time_gauss2_' tag]);
 
     %% --- (5) Density along diagonal x=y ------------------------------------
     nx_d = d.nx;   ny_d = d.ny;   nt_d = d.nt;
@@ -272,7 +276,7 @@ for k = 1:numel(files)
         d.eps_i, d.NT, d.NX), 'FontSize', FS, 'Interpreter', 'latex');
     legend('Location', 'best', 'FontSize', FS-1, 'Box', 'off');
     set(gca, 'FontSize', FS, 'Box', 'on', 'TickDir', 'out');  grid on;
-    savefig_both(fig, fig_dir, ['diag_slice_' tag]);
+    savefig_both(fig, fig_dir, ['diag_slice_gauss2_' tag]);
 
     close all;
 end
@@ -280,7 +284,7 @@ end
 %% =========================================================================
 %  Per-grid sweep figures  (load sweep summary files)
 %% =========================================================================
-sfiles = dir(fullfile(dat_dir, 'expsemi2d_sweep_gaussian_nt*_nx*.mat'));
+sfiles = dir(fullfile(dat_dir, 'expsemi2d_sweep_gauss2_nt*_nx*.mat'));
 
 for k = 1:numel(sfiles)
     s = load(fullfile(dat_dir, sfiles(k).name));
@@ -327,7 +331,7 @@ for k = 1:numel(sfiles)
     set(gca,'FontSize',FS,'Box','on','TickDir','out'); grid on;
 
     sgtitle(sprintf('$N_T=%d$,  $N_x=N_y=%d$', s.NT, s.NX), 'FontSize', FS+1, 'Interpreter', 'latex');
-    savefig_both(fig, fig_dir, ['sweep_' tag]);
+    savefig_both(fig, fig_dir, ['sweep_gauss2_' tag]);
     close all;
 end
 
@@ -390,7 +394,7 @@ for ei = 1:numel(EPS_VALS)
     set(gca,'FontSize',FS,'Box','on','TickDir','out'); grid on;
 
     sgtitle(sprintf('Grid refinement  ($\\varepsilon=%.4g$)', eps_i), 'FontSize', FS+1, 'Interpreter', 'latex');
-    savefig_both(fig, fig_dir, sprintf('refine_eps%g', eps_i));
+    savefig_both(fig, fig_dir, sprintf('refine_gauss2_eps%g', eps_i));
     close all;
 end
 
