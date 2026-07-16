@@ -1,12 +1,15 @@
-% POSTPROCESS_EXPSEMI  Post-process data from test_expsemi.m.
+% POSTPROCESS_BANDED_GAUSS2  Post-process data from test_banded_gauss2.m.
+%
+%   Gaussian-to-Gaussian SB with DIFFERENT means AND different standard
+%   deviations at the two endpoints (sigma0 != sigma1), Crank-Nicolson
+%   banded FP projection. Mirrors postprocess_expsemi_gauss2.m exactly.
 %
 %   Run this locally after copying results/data/ from the server.
-%   Reads all expsemi2d_gaussian_*.mat files found in dat_dir and produces:
 %
 %   Per-run figures  (one per (NT,NX,eps)):
 %     admm_conv_*      -- res_x / res_y / res_primal vs iteration
 %     err_vs_t_*       -- relative L2 error vs time (stag + cc)
-%     density_*        -- ExpSemi rho at 6 times, t=0 (rho0) to t=1 (rho1)
+%     density_*        -- Banded rho at 6 times, t=0 (rho0) to t=1 (rho1)
 %
 %   Per-grid figures  (one per (NT,NX)):
 %     sweep_err_*      -- max rel L2 error vs eps  (stag + cc)
@@ -19,8 +22,8 @@
 clear; close all;
 
 base_dir = fileparts(mfilename('fullpath'));
-dat_dir  = fullfile(base_dir, '..', 'results', 'data', 'gaussian');
-fig_dir  = fullfile(base_dir, '..', 'results', 'figures','paper', 'gaussian');
+dat_dir  = fullfile(base_dir, '..', 'results', 'data', 'gauss2');
+fig_dir  = fullfile(base_dir, '..', 'results', 'figures','paper', 'gauss2');
 if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 
 set(groot, 'defaultTextInterpreter',          'latex');
@@ -32,7 +35,7 @@ FS = 11;   LW = 1.5;   MS = 6;
 %% -------------------------------------------------------------------------
 %  Discover available files
 % -------------------------------------------------------------------------
-files = dir(fullfile(dat_dir, 'expsemi2d_gaussian_eps*_nt*_nx*.mat'));
+files = dir(fullfile(dat_dir, 'banded2d_gauss2_eps*_nt*_nx*.mat'));
 if isempty(files)
     error('No data files found in %s', dat_dir);
 end
@@ -44,7 +47,7 @@ f_NT  = nan(NF,1);
 f_NX  = nan(NF,1);
 for k = 1:NF
     tok = regexp(files(k).name, ...
-        'expsemi2d_gaussian_eps([\d.e+\-]+)_nt(\d+)_nx(\d+)', 'tokens');
+        'banded2d_gauss2_eps([\d.e+\-]+)_nt(\d+)_nx(\d+)', 'tokens');
     if ~isempty(tok)
         t = tok{1};
         f_eps(k) = str2double(t{1});
@@ -58,9 +61,9 @@ files = files(valid);   f_eps = f_eps(valid);   f_NT = f_NT(valid);   f_NX = f_N
 %% -------------------------------------------------------------------------
 %  Optional filter — set to [] to process all files
 % -------------------------------------------------------------------------
-FILTER_NT  = [];    % e.g. 64
-FILTER_NX  = [];    % e.g. 32
-FILTER_EPS = [];    % e.g. 1.0
+FILTER_NT  = [64];    % e.g. 64
+FILTER_NX  = [128];    % e.g. 32
+FILTER_EPS = [0.01];    % e.g. 1.0
 
 mask = true(numel(files), 1);
 if ~isempty(FILTER_NT),  mask = mask & (f_NT == FILTER_NT);                    end
@@ -85,7 +88,7 @@ for k = 1:numel(files)
     fprintf('Processing %s ...\n', tag);
 
     %% --- (1) ADMM convergence history -----------------------------------
-    iters_vec = (1:d.iters_es)';
+    iters_vec = (1:d.iters_bd)';
 
     fig = figure('Units','centimeters','Position',[2 2 20 7]);
     tl  = tiledlayout(1,3,'TileSpacing','compact','Padding','compact');
@@ -113,7 +116,7 @@ for k = 1:numel(files)
 
     sgtitle(sprintf('ADMM convergence  ($\\varepsilon=%.4g$,  $N_T=%d$,  $N_x=%d$)', ...
         d.eps_i, d.NT, d.NX), 'FontSize', FS+1, 'Interpreter', 'latex');
-    savefig_both(fig, fig_dir, ['admm_conv_' tag]);
+    savefig_both(fig, fig_dir, ['admm_conv_banded_gauss2_' tag]);
 
     %% --- (2) Error vs time ----------------------------------------------
     fig = figure('Units','centimeters','Position',[2 2 16 7]);
@@ -146,12 +149,12 @@ for k = 1:numel(files)
     ref_label = d.ref_type;
     sgtitle(sprintf('Error vs time  ($\\varepsilon=%.4g$,  $N_T=%d$,  $N_x=%d$,  ref: %s)', ...
         d.eps_i, d.NT, d.NX, ref_label), 'FontSize', FS+1, 'Interpreter', 'latex');
-    savefig_both(fig, fig_dir, ['err_vs_t_' tag]);
+    savefig_both(fig, fig_dir, ['err_vs_t_banded_gauss2_' tag]);
 
-    %% --- (3) Density snapshots: ExpSemi only, t=0 (rho0) to t=1 (rho1) ---
-    rho0_2d = normal2d_density(d.xx, d.yy, d.MU0(1), d.MU0(2), d.SIGMA);
+    %% --- (3) Density snapshots: Banded only, t=0 (rho0) to t=1 (rho1) ---
+    rho0_2d = normal2d_density(d.xx, d.yy, d.MU0(1), d.MU0(2), d.SIGMA0);
     rho0_2d = rho0_2d / (sum(rho0_2d(:)) * d.dx * d.dy);
-    rho1_2d = normal2d_density(d.xx, d.yy, d.MU1(1), d.MU1(2), d.SIGMA);
+    rho1_2d = normal2d_density(d.xx, d.yy, d.MU1(1), d.MU1(2), d.SIGMA1);
     rho1_2d = rho1_2d / (sum(rho1_2d(:)) * d.dx * d.dy);
 
     % Build cell indices via exact integer mirroring (k_hi = nt+1-k_lo) rather
@@ -175,7 +178,7 @@ for k = 1:numel(files)
             imgs{s} = rho1_2d;   t_ks(s) = 1;
         else
             k_idx   = idxs(s);
-            imgs{s} = squeeze(d.rho_es_cc(k_idx,:,:));
+            imgs{s} = squeeze(d.rho_bd_cc(k_idx,:,:));
             t_ks(s) = (k_idx - 0.5) * d.dt;
         end
     end
@@ -190,17 +193,17 @@ for k = 1:numel(files)
         ax = nexttile(tl, s);
         imagesc(d.xx, d.yy, imgs{s}');
         axis xy; colorbar; clim([clim_lo, clim_hi]);
-        title(sprintf('ExpSemi,  %s', fmt_time(t_ks(s))), 'FontSize', FS);
+        title(sprintf('Banded,  %s', fmt_time(t_ks(s))), 'FontSize', FS);
         if s > 3, xlabel('$x$','FontSize',FS); end
         if mod(s-1,3)==0, ylabel('$y$','FontSize',FS); end
         set(ax,'FontSize',FS-1,'TickDir','out');
     end
     sgtitle(sprintf('Density ($\\varepsilon=%.4g$,  $N_T=%d$,  $N_x=%d$)', ...
         d.eps_i, d.NT, d.NX), 'FontSize', FS+1, 'Interpreter', 'latex');
-    savefig_both(fig, fig_dir, ['density_' tag]);
+    savefig_both(fig, fig_dir, ['density_banded_gauss2_' tag]);
 
     %% --- (4) Iter time histogram ----------------------------------------
-    it = d.iter_times(1:d.iters_es);
+    it = d.iter_times(1:d.iters_bd);
     fig = figure('Units','centimeters','Position',[2 2 12 6]);
     histogram(it * 1e3, 40, 'FaceColor',[0.13 0.47 0.71], 'EdgeColor','none');
     xlabel('Time per iteration (ms)', 'FontSize', FS);
@@ -208,17 +211,17 @@ for k = 1:numel(files)
     title(sprintf('Iter time  ($N_T=%d$,  $N_x=%d$,  $\\varepsilon=%.4g$,  median=%.1fms)', ...
         d.NT, d.NX, d.eps_i, median(it)*1e3), 'FontSize', FS);
     set(gca,'FontSize',FS,'Box','on','TickDir','out'); grid on;
-    savefig_both(fig, fig_dir, ['iter_time_' tag]);
+    savefig_both(fig, fig_dir, ['iter_time_banded_gauss2_' tag]);
 
     %% --- (5) Density along diagonal x=y ------------------------------------
     nx_d = d.nx;   ny_d = d.ny;   nt_d = d.nt;
     nd   = min(nx_d, ny_d);
     x_diag = ((1:nd) - 0.5) * d.dx;   % spatial coord along x=y
 
-    rho_es_diag  = zeros(nt_d, nd);
+    rho_bd_diag  = zeros(nt_d, nd);
     rho_ref_diag = zeros(nt_d, nd);
     for ii = 1:nd
-        rho_es_diag(:,  ii) = d.rho_es_cc(:,  ii, ii);
+        rho_bd_diag(:,  ii) = d.rho_bd_cc(:,  ii, ii);
         rho_ref_diag(:, ii) = d.rho_ref_cc(:, ii, ii);
     end
     rho0_diag = diag(rho0_2d)';   % (1 x nd), rho0_2d computed in section (3)
@@ -259,12 +262,12 @@ for k = 1:numel(files)
             t_k   = t_cc_d(k_idx);
             plot(x_diag, rho_ref_diag(k_idx, :), '-', 'Color', clrs(s,:), ...
                 'LineWidth', LW, 'HandleVisibility', 'off');
-            plot(x_diag(mk_idx), rho_es_diag(k_idx, mk_idx),  'o', 'Color', clrs(s,:), ...
+            plot(x_diag(mk_idx), rho_bd_diag(k_idx, mk_idx),  'o', 'Color', clrs(s,:), ...
                 'MarkerSize', MS, 'MarkerFaceColor', clrs(s,:), 'LineStyle', 'none', ...
                 'DisplayName', fmt_time(t_k));
         end
     end
-    plot(nan, nan, 'ko', 'MarkerSize', MS, 'MarkerFaceColor', 'k', 'DisplayName', 'ExpSemi');
+    plot(nan, nan, 'ko', 'MarkerSize', MS, 'MarkerFaceColor', 'k', 'DisplayName', 'Banded');
     plot(nan, nan, 'k-', 'LineWidth', LW, 'DisplayName', sprintf('Ref (%s)', ref_label));
     xlabel('$x$  (along $x=y$)', 'FontSize', FS);
     ylabel('$\rho$', 'FontSize', FS);
@@ -272,7 +275,7 @@ for k = 1:numel(files)
         d.eps_i, d.NT, d.NX), 'FontSize', FS, 'Interpreter', 'latex');
     legend('Location', 'best', 'FontSize', FS-1, 'Box', 'off');
     set(gca, 'FontSize', FS, 'Box', 'on', 'TickDir', 'out');  grid on;
-    savefig_both(fig, fig_dir, ['diag_slice_' tag]);
+    savefig_both(fig, fig_dir, ['diag_slice_banded_gauss2_' tag]);
 
     close all;
 end
@@ -280,7 +283,7 @@ end
 %% =========================================================================
 %  Per-grid sweep figures  (load sweep summary files)
 %% =========================================================================
-sfiles = dir(fullfile(dat_dir, 'expsemi2d_sweep_gaussian_nt*_nx*.mat'));
+sfiles = dir(fullfile(dat_dir, 'banded2d_sweep_gauss2_nt*_nx*.mat'));
 
 for k = 1:numel(sfiles)
     s = load(fullfile(dat_dir, sfiles(k).name));
@@ -305,9 +308,9 @@ for k = 1:numel(sfiles)
     set(gca,'FontSize',FS,'Box','on','TickDir','out'); grid on;
 
     nexttile;
-    loglog(s.sw_eps, s.sw_wall_es,  '-o',  'LineWidth', LW, ...
+    loglog(s.sw_eps, s.sw_wall_bd,  '-o',  'LineWidth', LW, ...
         'MarkerSize', MS, 'MarkerFaceColor', [0.13 0.47 0.71], ...
-        'DisplayName', 'ExpSemi');
+        'DisplayName', 'Banded');
     hold on;
     loglog(s.sw_eps, s.sw_wall_ref, '--s', 'LineWidth', LW, ...
         'MarkerSize', MS, 'MarkerFaceColor', [0.5 0.5 0.5], ...
@@ -319,7 +322,7 @@ for k = 1:numel(sfiles)
     set(gca,'FontSize',FS,'Box','on','TickDir','out'); grid on;
 
     nexttile;
-    semilogx(s.sw_eps, s.sw_iters_es, '-o', 'LineWidth', LW, ...
+    semilogx(s.sw_eps, s.sw_iters_bd, '-o', 'LineWidth', LW, ...
         'MarkerSize', MS, 'MarkerFaceColor', [0.2 0.6 0.2]);
     xlabel('$\varepsilon$','FontSize',FS);
     ylabel('ADMM iterations','FontSize',FS);
@@ -327,7 +330,7 @@ for k = 1:numel(sfiles)
     set(gca,'FontSize',FS,'Box','on','TickDir','out'); grid on;
 
     sgtitle(sprintf('$N_T=%d$,  $N_x=N_y=%d$', s.NT, s.NX), 'FontSize', FS+1, 'Interpreter', 'latex');
-    savefig_both(fig, fig_dir, ['sweep_' tag]);
+    savefig_both(fig, fig_dir, ['sweep_banded_gauss2_' tag]);
     close all;
 end
 
@@ -358,8 +361,8 @@ for ei = 1:numel(EPS_VALS)
         fpath = fullfile(dat_dir, fv(j).name);
         err_stag(j) = max(load_field(fpath, 'err_rho_stag_t'));
         err_cc(j)   = max(load_field(fpath, 'err_rho_cc_t'));
-        wall_v(j)   = load_scalar(fpath, 'es_wall');
-        iter_v(j)   = load_scalar(fpath, 'iters_es');
+        wall_v(j)   = load_scalar(fpath, 'bd_wall');
+        iter_v(j)   = load_scalar(fpath, 'iters_bd');
     end
 
     Nv = nxv_s;   % N = Nx = Ny, ascending (Nt = 2N held fixed across this family)
@@ -390,7 +393,7 @@ for ei = 1:numel(EPS_VALS)
     set(gca,'FontSize',FS,'Box','on','TickDir','out'); grid on;
 
     sgtitle(sprintf('Grid refinement  ($\\varepsilon=%.4g$)', eps_i), 'FontSize', FS+1, 'Interpreter', 'latex');
-    savefig_both(fig, fig_dir, sprintf('refine_eps%g', eps_i));
+    savefig_both(fig, fig_dir, sprintf('refine_banded_gauss2_eps%g', eps_i));
     close all;
 end
 
@@ -445,7 +448,7 @@ function frac = edge_time_frac(eps_i, nt)
 end
 
 function rho = normal2d_density(xx, yy, mux, muy, sig)
-% Unnormalised isotropic 2D Gaussian density (same formula as test_expsemi.m's
+% Unnormalised isotropic 2D Gaussian density (same formula as test_banded.m's
 % Normal2d), used to reconstruct the exact rho0/rho1 boundary densities from
 % the saved MU0/MU1/SIGMA/xx/yy/dx/dy parameters (normalise after calling).
     rho = exp(-((xx - mux).^2 + (yy - muy).^2) / (2*sig^2)) / (2*pi*sig^2);
