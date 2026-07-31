@@ -26,11 +26,11 @@ function x_out = proj_fokker_planck_backslash(x_in, problem, cfg)
     bp     = problem.banded_proj;
 
     % Gather from GPU if needed (sparse \ is CPU-only)
-    mu    = gather(x_in.rho);
-    psi_x = gather(x_in.mx);
-    psi_y = gather(x_in.my);
-    rho0  = gather(rho0);
-    rho1  = gather(rho1);
+    % mu    = gather(x_in.rho);
+    % psi_x = gather(x_in.mx);
+    % psi_y = gather(x_in.my);
+    % rho0  = gather(rho0);
+    % rho1  = gather(rho1);
 
     zeros_x = zeros(nt, ny);
     zeros_y = zeros(nt, nx);

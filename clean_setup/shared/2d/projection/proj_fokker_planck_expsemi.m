@@ -39,8 +39,8 @@ function x_out = proj_fokker_planck_expsemi(x_in, problem, cfg)
     phi_vals = ep.phi_vals;  % (1 x nx x ny)
 
     mu    = x_in.rho;   % (ntm x nx x ny)
-    psi_x = x_in.mx;   % (nt  x nxm x ny)
-    psi_y = x_in.my;   % (nt  x nx  x nym)
+    psi_x = x_in.mx;    % (nt  x nxm x ny)
+    psi_y = x_in.my;    % (nt  x nx  x nym)
 
     rho0_3d = reshape(rho0, 1, nx, ny);
     rho1_3d = reshape(rho1, 1, nx, ny);
