@@ -61,7 +61,7 @@ cfg_base = cfg_ladmm_gaussian();
 
 %% --- Sweep A: fix NT, vary (NX,NY) ---
 NT_FIXED = 64;
-NXY_LIST = [8, 16, 32, 64, 128, 256];   % raise once you've timed a full pass at these
+NXY_LIST = [8, 16, 32, 64, 128, 256, 512, 1024];   % raise once you've timed a full pass at these
 
 fprintf('=== Sweep A: fixed nt=%d, varying nx=ny ===\n', NT_FIXED);
 print_header(VARIANTS, 'nx=ny');
@@ -69,7 +69,7 @@ resultsA = run_sweep(VARIANTS, cfg_base, prob_def, vareps, NT_FIXED, NXY_LIST, t
 
 %% --- Sweep B: fix (NX,NY), vary NT ---
 NXY_FIXED = 16;
-NT_LIST = [8, 16, 32, 64, 128, 256, 512];
+NT_LIST = [8, 16, 32, 64, 128, 256, 512, 1024, 2048];
 
 fprintf('\n=== Sweep B: fixed nx=ny=%d, varying nt ===\n', NXY_FIXED);
 print_header(VARIANTS, 'nt');
@@ -214,6 +214,7 @@ function results = run_sweep(variants, cfg_base, prob_def, vareps, nt_arg, nxy_a
         results.reldiff(p,:) = row_reldiff;
 
         ratio = row_times(2) / row_times(1);   % variant 2 / variant 1
+
         if vary_nxy
             axis_val = nxy;
         else
