@@ -86,7 +86,7 @@ function results = run_sweep(variants, cfg_base, prob_def, vareps, nt_arg, nxy_a
         cfg.vareps = vareps;
 
         problem = setup_problem(cfg, prob_def);
-        problem.expsemi_proj = precomp_expsemi_proj(problem, vareps);
+        problem.expsemi_proj = precomp_expsemi_proj_block(problem, vareps);
 
         % GPU-cast once per grid size, outside the timed calls (fair timing:
         % see bench_projection_gpu.m for why this matters).
