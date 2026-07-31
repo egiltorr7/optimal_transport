@@ -24,11 +24,11 @@
 clear; close all;
 run(fullfile(fileparts(mfilename('fullpath')), '..', 'setup_paths.m'));
 
-gpuDevice(1);
+gpuDevice(2);
 
 VARIANTS = {
     'expsemi_gpu',           @proj_fokker_planck_expsemi_gpu
-    'expsemi_backslash_gpu', @proj_fokker_planck_expsemi_backslash_gpu
+    'expsemi_backslash_gpu', @proj_fokker_planck_expsemi_backslash_block_gpu
 };
 
 vareps = 1e-8;
@@ -42,16 +42,16 @@ prob_def.rho1_func = @(xx, yy) Normal2d(xx, yy, MU1(1), MU1(2), SIGMA);
 cfg_base = cfg_ladmm_gaussian();
 
 %% --- Sweep A: fix NT, vary (NX,NY) ---
-NT_FIXED = 32;
-NXY_LIST = [8, 16, 32, 64];   % raise once you've timed a full pass at these
+NT_FIXED = 64;
+NXY_LIST = [8, 16, 32, 64, 128, 256];   % raise once you've timed a full pass at these
 
 fprintf('=== Sweep A: fixed nt=%d, varying nx=ny ===\n', NT_FIXED);
 fprintf('%8s  %10s  %16s  %20s  %8s\n', 'nx=ny', 'M=nx*ny', 'expsemi_gpu(ms)', 'backslash_gpu(ms)', 'ratio');
 resultsA = run_sweep(VARIANTS, cfg_base, prob_def, vareps, NT_FIXED, NXY_LIST, true);
 
 %% --- Sweep B: fix (NX,NY), vary NT ---
-NXY_FIXED = 32;
-NT_LIST = [8, 16, 32, 64, 128];
+NXY_FIXED = 16;
+NT_LIST = [8, 16, 32, 64, 128, 256, 512];
 
 fprintf('\n=== Sweep B: fixed nx=ny=%d, varying nt ===\n', NXY_FIXED);
 fprintf('%8s  %10s  %16s  %20s  %8s\n', 'nt', 'M=nx*ny', 'expsemi_gpu(ms)', 'backslash_gpu(ms)', 'ratio');
