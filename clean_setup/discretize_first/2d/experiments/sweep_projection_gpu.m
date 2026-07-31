@@ -43,7 +43,7 @@ cfg_base = cfg_ladmm_gaussian();
 
 %% --- Sweep A: fix NT, vary (NX,NY) ---
 NT_FIXED = 64;
-NXY_LIST = [8, 16, 32, 64, 128, 256];   % raise once you've timed a full pass at these
+NXY_LIST = [8, 16, 32, 64, 128, 256, 512, 1024];   % raise once you've timed a full pass at these
 
 fprintf('=== Sweep A: fixed nt=%d, varying nx=ny ===\n', NT_FIXED);
 fprintf('%8s  %10s  %16s  %20s  %8s\n', 'nx=ny', 'M=nx*ny', 'expsemi_gpu(ms)', 'backslash_gpu(ms)', 'ratio');
@@ -51,7 +51,7 @@ resultsA = run_sweep(VARIANTS, cfg_base, prob_def, vareps, NT_FIXED, NXY_LIST, t
 
 %% --- Sweep B: fix (NX,NY), vary NT ---
 NXY_FIXED = 16;
-NT_LIST = [8, 16, 32, 64, 128, 256, 512];
+NT_LIST = [8, 16, 32, 64, 128, 256, 512, 1024, 2048];
 
 fprintf('\n=== Sweep B: fixed nx=ny=%d, varying nt ===\n', NXY_FIXED);
 fprintf('%8s  %10s  %16s  %20s  %8s\n', 'nt', 'M=nx*ny', 'expsemi_gpu(ms)', 'backslash_gpu(ms)', 'ratio');
@@ -119,7 +119,7 @@ function results = run_sweep(variants, cfg_base, prob_def, vareps, nt_arg, nxy_a
         results.M(p)    = nxy * nxy;
         results.t(p, :) = row_times;
 
-        ratio = row_times(2) / row_times(1);   % backslash_gpu / expsemi_gpu
+        % ratio = row_times(2) / row_times(1);   % backslash_gpu / expsemi_gpu
         if vary_nxy
             axis_val = nxy;
         else
