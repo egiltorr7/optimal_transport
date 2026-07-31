@@ -40,7 +40,7 @@ clear; close all;
 run(fullfile(fileparts(mfilename('fullpath')), '..', 'setup_paths.m'));
 
 
-GPU_IDX = 1;   % set to whichever device index is actually idle on a shared machine
+GPU_IDX = 2;   % set to whichever device index is actually idle on a shared machine
 gpuDevice(GPU_IDX);
 
 % {name, function handle, precompute tag: 'thomas' or 'block'}
