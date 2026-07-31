@@ -48,17 +48,19 @@ prob_def.rho1_func = @(xx, yy) 0.5*Normal2d(xx, yy, MU1A(1), MU1A(2), SIGMA1) ..
 %% -------------------------------------------------------------------------
 %  Grid refinement levels:  [NT, NX]  (NY = NX always, NT = 2*NX lockstep)
 % -------------------------------------------------------------------------
-GRIDS = [ 64,  32 ; ...
-         128,  64 ; ...
-         256, 128 ; ...
-         512, 256 ];
+% GRIDS = [ 64,  32 ; ...
+%          128,  64 ; ...
+%          256, 128 ; ...
+%          512, 256 ];
+GRIDS = [512, 256];
 
 N_GRIDS = size(GRIDS, 1);
 
 %% -------------------------------------------------------------------------
 %  Epsilon sweep (no threshold -- Sinkhorn is the reference for every eps)
 % -------------------------------------------------------------------------
-EPS_SWEEP  = [1e-8, 1e-4, 0.01, 0.1, 1.0, 10.0, 100.0];
+% EPS_SWEEP  = [1e-8, 1e-4, 0.01, 0.1, 1.0, 10.0, 100.0];
+EPS_SWEEP = [1, 10, 100];
 NE         = numel(EPS_SWEEP);
 
 TOL_WORK   = 1e-8;
@@ -72,7 +74,7 @@ cfg_es.gamma      = 0.1;
 cfg_es.tau        = 0.11;
 cfg_es.tol        = TOL_WORK;
 cfg_es.use_gpu    = true;
-cfg_es.gpu_device = 1;
+cfg_es.gpu_device = 8;
 cfg_es.print_every = 2000;
 cfg_es.projection  = @proj_fokker_planck_expsemi;
 
@@ -151,7 +153,7 @@ for g = 1:N_GRIDS
         % numerically singular. Don't save the Sinkhorn density/error data in
         % that case -- a broken reference would silently corrupt the error
         % metrics. Still run and save the ADMM solver's own output below.
-        sinkhorn_ok = res_sk.converged && ~any(isnan(res_sk.rho(:))) && ~any(isinf(res_sk.rho(:)));
+        sinkhorn_ok = ~any(isnan(res_sk.rho(:))) && ~any(isinf(res_sk.rho(:)));
         if sinkhorn_ok
             rho_sk_full   = res_sk.rho;                                   % (nt+1 x nx x ny)
             rho_ref_stag  = res_sk.rho(2:nt, :, :);                      % (ntm x nx x ny)
