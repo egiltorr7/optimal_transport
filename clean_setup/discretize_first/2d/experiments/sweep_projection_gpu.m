@@ -1,5 +1,6 @@
 % SWEEP_PROJECTION_GPU  Scaling study: expsemi_gpu (batched Thomas) vs
-%   expsemi_backslash_gpu (per-mode sparse), on two independent axes.
+%   expsemi_backslash_block_gpu (one big block-diagonal sparse solve), on
+%   two independent axes, with per-variant GPU memory footprint reported.
 %
 %   M = nx*ny (the batch/mode dimension) and nt (the sequential recursion
 %   depth) test different mechanisms and are swept ONE AT A TIME, not
@@ -8,14 +9,28 @@
 %
 %     Sweep A: fix NT, vary (NX,NY) -- tests whether M is "nearly free" for
 %              the batched solver vs ~linear-in-M for the per-mode solver.
-%     Sweep B: fix (NX,NY), vary NT -- tests the sequential-depth floor;
-%              expect BOTH variants to scale ~linearly in nt (batching
-%              fixes the M axis, not the nt axis).
+%     Sweep B: fix (NX,NY), vary NT -- tests the sequential-depth floor.
 %
-%   Keep M small for expsemi_backslash_gpu -- it's nx*ny sequential
-%   sparse-gpuArray solves of tiny systems, and per-call kernel-launch
-%   overhead dominates. NXY_LIST/NXY_FIXED below start modest; scale up
-%   once you've confirmed a run completes in reasonable time.
+%   The two variants need DIFFERENT, non-overlapping precomputed fields
+%   (Thomas needs lower_T/main_T/upper_T/main_T_mod; the block method needs
+%   T_block instead), so each VARIANTS row tags which precompute it needs,
+%   and this script builds ONE problem struct per distinct tag actually in
+%   use -- not a single shared struct carrying both (that was the earlier,
+%   wasteful design: precomp_expsemi_proj_block used to call
+%   precomp_expsemi_proj first and inherit all its unused fields, roughly
+%   doubling GPU memory for no benefit). See precomp_expsemi_proj_block.m.
+%
+%   Memory reporting: gpuDevice().AvailableMemory is snapshotted immediately
+%   before and after each tag's precompute+cast step (with wait(gpuDevice())
+%   in between to make sure all GPU work has actually finished), so the
+%   delta reflects that tag's real persistent GPU footprint. The GPU is
+%   reset (reset(gpuDevice(GPU_IDX))) at the start of EVERY sweep point,
+%   before any allocation for that point -- both so memory deltas start
+%   from a clean baseline every time, and so a long sweep spanning many
+%   different array sizes doesn't accumulate fragmented, stale memory from
+%   earlier iterations. MATLAB does not proactively return freed gpuArray
+%   memory to the driver (it pools it for reuse), so without this reset,
+%   AvailableMemory readings across iterations would not be reliable.
 %
 %   To check robustness (recommended before trusting either scaling law):
 %   call run_sweep again with a different NT_FIXED (Sweep A) or a different
@@ -24,11 +39,13 @@
 clear; close all;
 run(fullfile(fileparts(mfilename('fullpath')), '..', 'setup_paths.m'));
 
-gpuDevice(1);
+GPU_IDX = 1;   % set to whichever device index is actually idle on a shared machine
+gpuDevice(GPU_IDX);
 
+% {name, function handle, precompute tag: 'thomas' or 'block'}
 VARIANTS = {
-    'expsemi_gpu',           @proj_fokker_planck_expsemi_gpu
-    'expsemi_backslash_gpu', @proj_fokker_planck_expsemi_backslash_gpu
+    'expsemi_gpu',                 @proj_fokker_planck_expsemi_gpu,                 'thomas'
+    'expsemi_backslash_block_gpu', @proj_fokker_planck_expsemi_backslash_block_gpu, 'block'
 };
 
 vareps = 1e-8;
@@ -46,19 +63,28 @@ NT_FIXED = 32;
 NXY_LIST = [8, 16, 32, 64];   % raise once you've timed a full pass at these
 
 fprintf('=== Sweep A: fixed nt=%d, varying nx=ny ===\n', NT_FIXED);
-fprintf('%8s  %10s  %16s  %20s  %8s\n', 'nx=ny', 'M=nx*ny', 'expsemi_gpu(ms)', 'backslash_gpu(ms)', 'ratio');
-resultsA = run_sweep(VARIANTS, cfg_base, prob_def, vareps, NT_FIXED, NXY_LIST, true);
+print_header(VARIANTS, 'nx=ny');
+resultsA = run_sweep(VARIANTS, cfg_base, prob_def, vareps, NT_FIXED, NXY_LIST, true, GPU_IDX);
 
 %% --- Sweep B: fix (NX,NY), vary NT ---
 NXY_FIXED = 32;
 NT_LIST = [8, 16, 32, 64, 128];
 
 fprintf('\n=== Sweep B: fixed nx=ny=%d, varying nt ===\n', NXY_FIXED);
-fprintf('%8s  %10s  %16s  %20s  %8s\n', 'nt', 'M=nx*ny', 'expsemi_gpu(ms)', 'backslash_gpu(ms)', 'ratio');
-resultsB = run_sweep(VARIANTS, cfg_base, prob_def, vareps, NT_LIST, NXY_FIXED, false);
+print_header(VARIANTS, 'nt');
+resultsB = run_sweep(VARIANTS, cfg_base, prob_def, vareps, NT_LIST, NXY_FIXED, false, GPU_IDX);
 
 %% ---------------------------------------------------------------------
-function results = run_sweep(variants, cfg_base, prob_def, vareps, nt_arg, nxy_arg, vary_nxy)
+function print_header(variants, axis_name)
+    fprintf('%8s  %10s', axis_name, 'M=nx*ny');
+    for k = 1:size(variants,1)
+        fprintf('  %20s  %10s', [variants{k,1} '(ms)'], 'mem(MB)');
+    end
+    fprintf('  %8s\n', 'ratio');
+end
+
+%% ---------------------------------------------------------------------
+function results = run_sweep(variants, cfg_base, prob_def, vareps, nt_arg, nxy_arg, vary_nxy, gpu_idx)
 % RUN_SWEEP  Times VARIANTS across one swept axis, holding the other fixed.
 %   vary_nxy = true:  nt_arg is a scalar (fixed nt), nxy_arg is a list.
 %   vary_nxy = false: nxy_arg is a scalar (fixed nx=ny), nt_arg is a list.
@@ -70,9 +96,13 @@ function results = run_sweep(variants, cfg_base, prob_def, vareps, nt_arg, nxy_a
     end
 
     n_var = size(variants, 1);
-    results.nt = zeros(n_pts, 1);
-    results.M  = zeros(n_pts, 1);
-    results.t  = zeros(n_pts, n_var);
+    tags  = variants(:, 3);
+    uniq_tags = unique(tags, 'stable');
+
+    results.nt  = zeros(n_pts, 1);
+    results.M   = zeros(n_pts, 1);
+    results.t   = zeros(n_pts, n_var);
+    results.mem = zeros(n_pts, n_var);
 
     for p = 1:n_pts
         if vary_nxy
@@ -85,47 +115,89 @@ function results = run_sweep(variants, cfg_base, prob_def, vareps, nt_arg, nxy_a
         cfg.nt = nt; cfg.nx = nxy; cfg.ny = nxy;
         cfg.vareps = vareps;
 
-        problem = setup_problem(cfg, prob_def);
-        problem.expsemi_proj = precomp_expsemi_proj_block(problem, vareps);
+        % Flush GPU memory before building anything for this problem size --
+        % clean baseline for the memory deltas below, and avoids fragmented
+        % leftovers from the previous (differently-sized) iteration.
+        reset(gpuDevice(gpu_idx));
 
-        % GPU-cast once per grid size, outside the timed calls (fair timing:
-        % see bench_projection_gpu.m for why this matters).
-        problem.rho0     = gpuArray(problem.rho0);
-        problem.rho1     = gpuArray(problem.rho1);
-        problem.lambda_t = gpuArray(problem.lambda_t);
-        ep = problem.expsemi_proj;
-        epf = fieldnames(ep);
-        for i = 1:numel(epf)
-            ep.(epf{i}) = gpuArray(ep.(epf{i}));
-        end
-        problem.expsemi_proj = ep;
+        problem_base = setup_problem(cfg, prob_def);
 
         nxm = nxy - 1; nym = nxy - 1; ntm = nt - 1;
         t_stag  = reshape(linspace(0, 1, ntm)', ntm, 1, 1);
-        rho0_3d = reshape(problem.rho0, 1, nxy, nxy);
-        rho1_3d = reshape(problem.rho1, 1, nxy, nxy);
+        rho0_3d = reshape(problem_base.rho0, 1, nxy, nxy);
+        rho1_3d = reshape(problem_base.rho1, 1, nxy, nxy);
+        x_in_cpu.rho = (1 - t_stag) .* rho0_3d + t_stag .* rho1_3d;
+        x_in_cpu.mx  = zeros(nt, nxm, nxy);
+        x_in_cpu.my  = zeros(nt, nxy,  nym);
 
-        x_in.rho = gpuArray((1 - t_stag) .* rho0_3d + t_stag .* rho1_3d);
-        x_in.mx  = gpuArray.zeros(nt, nxm, nxy);
-        x_in.my  = gpuArray.zeros(nt, nxy,  nym);
+        % --- Build ONE gpu-cast problem struct per distinct precompute tag
+        %     actually used by the active variants, tracking each tag's own
+        %     GPU memory footprint via a before/after AvailableMemory delta.
+        problems_by_tag = struct();
+        mem_by_tag      = struct();
+        for t = 1:numel(uniq_tags)
+            tag = uniq_tags{t};
 
-        row_times = zeros(1, n_var);
-        for k = 1:n_var
-            fn = variants{k, 2};
-            row_times(k) = gputimeit(@() fn(x_in, problem, cfg));
+            wait(gpuDevice());
+            mem_before = gpuDevice().AvailableMemory;
+
+            problem_tag = problem_base;
+            problem_tag.rho0     = gpuArray(problem_base.rho0);
+            problem_tag.rho1     = gpuArray(problem_base.rho1);
+            problem_tag.lambda_t = gpuArray(problem_base.lambda_t);
+
+            switch tag
+                case 'thomas'
+                    ep = precomp_expsemi_proj(problem_base, vareps);
+                case 'block'
+                    ep = precomp_expsemi_proj_block(problem_base, vareps);
+                otherwise
+                    error('run_sweep: unknown precompute tag "%s"', tag);
+            end
+            epf = fieldnames(ep);
+            for i = 1:numel(epf)
+                ep.(epf{i}) = gpuArray(ep.(epf{i}));
+            end
+            problem_tag.expsemi_proj = ep;
+
+            wait(gpuDevice());
+            mem_after = gpuDevice().AvailableMemory;
+
+            problems_by_tag.(tag) = problem_tag;
+            mem_by_tag.(tag)      = (mem_before - mem_after) / 1e6;   % MB
         end
 
-        results.nt(p)   = nt;
-        results.M(p)    = nxy * nxy;
-        results.t(p, :) = row_times;
+        x_in.rho = gpuArray(x_in_cpu.rho);
+        x_in.mx  = gpuArray(x_in_cpu.mx);
+        x_in.my  = gpuArray(x_in_cpu.my);
 
-        ratio = row_times(2) / row_times(1);   % backslash_gpu / expsemi_gpu
+        row_times = zeros(1, n_var);
+        row_mem   = zeros(1, n_var);
+        for k = 1:n_var
+            fn  = variants{k, 2};
+            tag = variants{k, 3};
+            problem = problems_by_tag.(tag);
+
+            row_times(k) = gputimeit(@() fn(x_in, problem, cfg));
+            row_mem(k)   = mem_by_tag.(tag);
+        end
+
+        results.nt(p)    = nt;
+        results.M(p)     = nxy * nxy;
+        results.t(p, :)  = row_times;
+        results.mem(p,:) = row_mem;
+
+        ratio = row_times(2) / row_times(1);   % variant 2 / variant 1
         if vary_nxy
             axis_val = nxy;
         else
             axis_val = nt;
         end
-        fprintf('%8d  %10d  %16.4f  %20.4f  %8.2f\n', ...
-            axis_val, nxy*nxy, row_times(1)*1e3, row_times(2)*1e3, ratio);
+
+        fprintf('%8d  %10d', axis_val, nxy*nxy);
+        for k = 1:n_var
+            fprintf('  %20.4f  %10.2f', row_times(k)*1e3, row_mem(k));
+        end
+        fprintf('  %8.2f\n', ratio);
     end
 end
