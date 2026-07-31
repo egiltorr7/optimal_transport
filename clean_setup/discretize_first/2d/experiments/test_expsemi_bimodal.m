@@ -127,7 +127,7 @@ for g = 1:N_GRIDS
 
         %% ---- Reference: Sinkhorn for every eps (no closed form) --------
         cfg_sk.vareps            = eps_i;
-        cfg_sk.max_iter          = 5000;
+        cfg_sk.max_iter          = 10000;
         cfg_sk.tol               = 1e-10;
         cfg_sk.precomp_heat      = @precomp_heat_neumann_2d;
         cfg_sk.use_pdf_marginals = true;

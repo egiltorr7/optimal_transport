@@ -101,7 +101,7 @@ function ep = precomp_expsemi_proj(problem, vareps)
     kx = reshape(0:nx-1, 1, nx, 1);
     ep.tw_x  = exp(-1i * pi * kx / (2*nx));                     % (1 x nx x 1)
     ep.w_x   = reshape([1/sqrt(nx), sqrt(2/nx)*ones(1,nx-1)]/2, 1, nx, 1);  % forward (absorbs ×2 from FFT even-ext)
-    ep.iw_x  = 2 * ep.w_x;                                                    % inverse (full synthesis weight)
+    ep.iw_x  = 2 * ep.w_x;                                                  % inverse (full synthesis weight)
     ep.itw_x = conj(ep.tw_x);
 
     ky = reshape(0:ny-1, 1, 1, ny);
