@@ -39,6 +39,7 @@
 clear; close all;
 run(fullfile(fileparts(mfilename('fullpath')), '..', 'setup_paths.m'));
 
+
 GPU_IDX = 1;   % set to whichever device index is actually idle on a shared machine
 gpuDevice(GPU_IDX);
 
@@ -59,16 +60,16 @@ prob_def.rho1_func = @(xx, yy) Normal2d(xx, yy, MU1(1), MU1(2), SIGMA);
 cfg_base = cfg_ladmm_gaussian();
 
 %% --- Sweep A: fix NT, vary (NX,NY) ---
-NT_FIXED = 32;
-NXY_LIST = [8, 16, 32, 64];   % raise once you've timed a full pass at these
+NT_FIXED = 64;
+NXY_LIST = [8, 16, 32, 64, 128, 256];   % raise once you've timed a full pass at these
 
 fprintf('=== Sweep A: fixed nt=%d, varying nx=ny ===\n', NT_FIXED);
 print_header(VARIANTS, 'nx=ny');
 resultsA = run_sweep(VARIANTS, cfg_base, prob_def, vareps, NT_FIXED, NXY_LIST, true, GPU_IDX);
 
 %% --- Sweep B: fix (NX,NY), vary NT ---
-NXY_FIXED = 32;
-NT_LIST = [8, 16, 32, 64, 128];
+NXY_FIXED = 16;
+NT_LIST = [8, 16, 32, 64, 128, 256, 512];
 
 fprintf('\n=== Sweep B: fixed nx=ny=%d, varying nt ===\n', NXY_FIXED);
 print_header(VARIANTS, 'nt');
