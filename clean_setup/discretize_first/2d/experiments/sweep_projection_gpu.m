@@ -79,7 +79,11 @@ resultsB = run_sweep(VARIANTS, cfg_base, prob_def, vareps, NT_LIST, NXY_FIXED, f
 function print_header(variants, axis_name)
     fprintf('%8s  %10s', axis_name, 'M=nx*ny');
     for k = 1:size(variants,1)
-        fprintf('  %20s  %10s', [variants{k,1} '(ms)'], 'mem(MB)');
+        label = variants{k,1};
+        fprintf('  %20s  %10s', [label '(ms)'], 'mem(MB)');
+        if k > 1
+            fprintf('  %12s', 'rel_diff');
+        end
     end
     fprintf('  %8s\n', 'ratio');
 end
@@ -100,10 +104,11 @@ function results = run_sweep(variants, cfg_base, prob_def, vareps, nt_arg, nxy_a
     tags  = variants(:, 3);
     uniq_tags = unique(tags, 'stable');
 
-    results.nt  = zeros(n_pts, 1);
-    results.M   = zeros(n_pts, 1);
-    results.t   = zeros(n_pts, n_var);
-    results.mem = zeros(n_pts, n_var);
+    results.nt      = zeros(n_pts, 1);
+    results.M       = zeros(n_pts, 1);
+    results.t       = zeros(n_pts, n_var);
+    results.mem     = zeros(n_pts, n_var);
+    results.reldiff = zeros(n_pts, n_var);   % vs variant 1; column 1 is always 0
 
     for p = 1:n_pts
         if vary_nxy
@@ -172,8 +177,12 @@ function results = run_sweep(variants, cfg_base, prob_def, vareps, nt_arg, nxy_a
         x_in.mx  = gpuArray(x_in_cpu.mx);
         x_in.my  = gpuArray(x_in_cpu.my);
 
-        row_times = zeros(1, n_var);
-        row_mem   = zeros(1, n_var);
+        dV = problem_base.dt * problem_base.dx * problem_base.dy;
+
+        row_times   = zeros(1, n_var);
+        row_mem     = zeros(1, n_var);
+        row_reldiff = zeros(1, n_var);
+        ref_rho     = [];
         for k = 1:n_var
             fn  = variants{k, 2};
             tag = variants{k, 3};
@@ -181,12 +190,28 @@ function results = run_sweep(variants, cfg_base, prob_def, vareps, nt_arg, nxy_a
 
             row_times(k) = gputimeit(@() fn(x_in, problem, cfg));
             row_mem(k)   = mem_by_tag.(tag);
+
+            % One plain (untimed) call per variant, purely to compare outputs
+            % -- correctness cross-check independent of the timing above.
+            out = fn(x_in, problem, cfg);
+            out_rho = out.rho;
+            if isa(out_rho, 'gpuArray')
+                out_rho = gather(out_rho);
+            end
+            if isempty(ref_rho)
+                ref_rho = out_rho;
+                row_reldiff(k) = 0;
+            else
+                row_reldiff(k) = sqrt(dV * sum((out_rho(:) - ref_rho(:)).^2)) / ...
+                                  sqrt(dV * sum(ref_rho(:).^2));
+            end
         end
 
-        results.nt(p)    = nt;
-        results.M(p)     = nxy * nxy;
-        results.t(p, :)  = row_times;
-        results.mem(p,:) = row_mem;
+        results.nt(p)       = nt;
+        results.M(p)        = nxy * nxy;
+        results.t(p, :)     = row_times;
+        results.mem(p, :)   = row_mem;
+        results.reldiff(p,:) = row_reldiff;
 
         ratio = row_times(2) / row_times(1);   % variant 2 / variant 1
         if vary_nxy
@@ -198,6 +223,9 @@ function results = run_sweep(variants, cfg_base, prob_def, vareps, nt_arg, nxy_a
         fprintf('%8d  %10d', axis_val, nxy*nxy);
         for k = 1:n_var
             fprintf('  %20.4f  %10.2f', row_times(k)*1e3, row_mem(k));
+            if k > 1
+                fprintf('  %12.3e', row_reldiff(k));
+            end
         end
         fprintf('  %8.2f\n', ratio);
     end
