@@ -48,17 +48,19 @@ prob_def.rho1_func = @(xx, yy) Normal2d(xx, yy, MU1(1), MU1(2), SIGMA1);
 %% -------------------------------------------------------------------------
 %  Grid refinement levels:  [NT, NX]  (NY = NX always, NT = 2*NX lockstep)
 % -------------------------------------------------------------------------
-GRIDS = [ 64,  32 ; ...
-         128,  64 ; ...
-         256, 128 ; ...
-         512, 256 ];
+% GRIDS = [ 64,  32 ; ...
+%          128,  64 ; ...
+%          256, 128 ; ...
+%          512, 256 ];
+GRIDS = [512, 256];
 
 N_GRIDS = size(GRIDS, 1);
 
 %% -------------------------------------------------------------------------
 %  Epsilon sweep and threshold
 % -------------------------------------------------------------------------
-EPS_SWEEP  = [1e-8, 1e-4, 0.01, 0.1, 1.0, 10.0, 100.0];
+% EPS_SWEEP  = [1e-8, 1e-4, 0.01, 0.1, 1.0, 10.0, 100.0];
+EPS_SWEEP = [10, 100];
 EPS_THRESH = 5e-3;   % below: analytical reference; above: Sinkhorn
 NE         = numel(EPS_SWEEP);
 
@@ -73,7 +75,7 @@ cfg_es.gamma      = 0.1;
 cfg_es.tau        = 0.11;
 cfg_es.tol        = TOL_WORK;
 cfg_es.use_gpu    = true;
-cfg_es.gpu_device = 1;
+cfg_es.gpu_device = 4;
 cfg_es.print_every = 2000;
 cfg_es.projection  = @proj_fokker_planck_expsemi;
 
@@ -143,7 +145,7 @@ for g = 1:N_GRIDS
             rho_sk_full  = [];
         else
             cfg_sk.vareps            = eps_i;
-            cfg_sk.max_iter          = 5000;
+            cfg_sk.max_iter          = 10000;
             cfg_sk.tol               = 1e-10;
             cfg_sk.precomp_heat      = @precomp_heat_neumann_2d;
             cfg_sk.use_pdf_marginals = true;
