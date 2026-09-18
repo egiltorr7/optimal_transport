@@ -21,7 +21,11 @@ some number moved.
                       extra divergence term and mz's prox coupling are all
                       wired up right -- an isotropic problem would pass even
                       with x/y/z mixed up.
-  6. analytical    -- relative error against analytical_sb_gaussian_3d.
+  6. reference     -- analytical_sb_gaussian_3d satisfies the discrete FP
+                      equation to O(h^2), checked under refinement and
+                      without the solver -- so a disagreement in 7 can be
+                      attributed to the solver rather than the reference.
+  7. analytical    -- relative error of the solve against that reference.
 """
 import sys
 from pathlib import Path
@@ -296,7 +300,39 @@ def test_reduces_to_2d():
 
 
 # --------------------------------------------------------------------------
-# 6. vs the closed-form 3D Schrodinger bridge
+# 6. the analytical reference itself satisfies the FP equation
+# --------------------------------------------------------------------------
+def test_analytical_is_fp_feasible():
+    """Check analytical_sb_gaussian_3d WITHOUT involving the solver.
+
+    The exact SB solution satisfies d_t rho + div m = eps*Laplacian rho
+    exactly in the continuum, so on the staggered grid its residual must be
+    a pure truncation error: O(h^2), i.e. it must drop by ~4x per halving of
+    h. This pins down alpha, sig2_t and the velocity field independently of
+    the solver -- test_analytical below can only ever tell us that solver
+    and reference agree, not that either is right.
+    """
+    vareps, sigma = 0.05, 0.08
+    prev = None
+    for n in (8, 16, 32):
+        p = setup_problem_3d(prob_gaussian_3d(sigma=sigma), nt=n, nx=n, ny=n, nz=n)
+        p.ops = build_operators_3d(p)
+        rho_a, mx_a, my_a, mz_a = analytical_sb_gaussian_3d(p, vareps)
+        res = _fp_residual(p, State3D(rho_a, mx_a, my_a, mz_a), vareps)
+        # Relative to d_t rho, the leading term the residual must cancel.
+        scale = float(jnp.linalg.norm(p.ops.deriv_t_at_phi(rho_a, p.rho0, p.rho1)))
+        rel = float(jnp.linalg.norm(res)) / scale
+        if prev is None:
+            check(f"analytical FP residual n={n}", rel < 0.1, f"rel={rel:.3e}")
+        else:
+            rate = prev / rel
+            check(f"analytical FP residual n={n} (2nd order)", rate > 2.5,
+                  f"rel={rel:.3e}, dropped {rate:.2f}x (expect ~4x)")
+        prev = rel
+
+
+# --------------------------------------------------------------------------
+# 7. vs the closed-form 3D Schrodinger bridge
 # --------------------------------------------------------------------------
 def test_analytical():
     nt, nx, ny, nz = 12, 12, 12, 12
@@ -319,7 +355,7 @@ def test_analytical():
 
 if __name__ == "__main__":
     for t in (test_dct, test_adjoints, test_thomas, test_projection,
-              test_reduces_to_2d, test_analytical):
+              test_reduces_to_2d, test_analytical_is_fp_feasible, test_analytical):
         print(f"\n--- {t.__name__} ---")
         t()
     n_fail = _results.count(False)
