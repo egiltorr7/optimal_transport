@@ -1,0 +1,547 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{listings}
+
+\geometry{margin=1.1in}
+
+\newtheorem{lemma}{Lemma}
+\newtheorem{fact}{Fact}
+\newtheorem{remark}{Remark}
+
+\newcommand{\eps}{\varepsilon}
+\newcommand{\dt}{\Delta t}
+\newcommand{\dx}{\Delta x}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\pdfstringdefDisableCommands{%
+  \def\eps{eps}\def\dt{dt}\def\dx{dx}\def\code#1{#1}%
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  columns=fullflexible,
+  keepspaces=true,
+  breaklines=true,
+  frame=single,
+}
+
+\title{The Sinkhorn Reference Solution\\
+and How One Fit Serves Many Grids}
+\author{Optimal Transport / Schr\"odinger Bridge Project\\
+Documents \code{sinkhorn.py} and \code{study\_utils.reference\_solution}}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+How the Schr\"odinger-bridge reference is computed (Hopf--Cole factorisation
+plus a Sinkhorn iteration against a Neumann heat semigroup), how the resulting
+trajectory is evaluated, and how a single fine-grid fit is reused as the
+reference for every LADMM resolution. The last part is the delicate one: the
+fit lives on one spatial grid and the solver on another, and the reduction
+between them is not a free choice. Section~\ref{sec:reduce} shows that exact
+subsampling is \emph{geometrically impossible} for a dyadic sweep of
+cell-centred grids, that the block average previously used disagreed with the
+solver's own marginals at $O(h^2)$, and that this disagreement appeared as a
+spurious error floor at $t=0$ and $t=1$ --- amplified to $O(h^2/\dt)$, i.e.
+\emph{growing} under time refinement, whenever it was measured through the FP
+residual. The fix is to evaluate the fine grid's own DCT-II series at whatever
+points are wanted, which is exact and matches the solver's marginals to
+machine precision.
+\end{abstract}
+
+\tableofcontents
+
+\section{Why this reference exists}
+
+\code{analytical\_sb\_gaussian} solves the free-space bridge on all of
+$\mathbb{R}$. That is exact and cheap, but only while the density's spread
+stays small relative to the domain: once $\eps$ is large enough that mass
+reaches $x=0$ or $x=1$, the free-space solution and the solver's
+reflecting-wall problem are different problems. \code{sinkhorn.py} solves the
+bridge that the discretisation actually represents --- exact discrete marginals
+on the bounded domain with Neumann (reflecting) walls --- and
+\code{study\_utils} switches to it above
+\code{SINKHORN\_VAREPS\_THRESHOLD}~$=5\times10^{-3}$.
+
+\section{Hopf--Cole and the Schr\"odinger system}
+
+Write the bridge density as a product,
+\begin{equation}
+  \rho(t,x) = \varphi(t,x)\,\psi(t,x),
+  \label{eq:hopfcole}
+\end{equation}
+where the two factors solve heat equations running in opposite directions,
+\begin{equation}
+  \partial_t\varphi = \eps\,\Delta\varphi,
+  \qquad
+  -\partial_t\psi = \eps\,\Delta\psi,
+  \label{eq:schrodinger}
+\end{equation}
+subject to the two marginal conditions
+\begin{equation}
+  \varphi(0,\cdot)\psi(0,\cdot) = \rho_0,
+  \qquad
+  \varphi(1,\cdot)\psi(1,\cdot) = \rho_1 .
+  \label{eq:marginals}
+\end{equation}
+Both factors are non-negative; neither is a probability density on its own.
+The pair $(\varphi,\psi)$ is determined up to the scaling
+$(\varphi,\psi)\mapsto(c\varphi,\psi/c)$, which leaves $\rho$ unchanged.
+
+\subsection{The momentum field}
+
+The flux is not an independent unknown --- it follows from
+\eqref{eq:hopfcole}--\eqref{eq:schrodinger}. Differentiating
+\eqref{eq:hopfcole} and using \eqref{eq:schrodinger},
+\begin{equation}
+  \partial_t\rho
+  = \psi\,\partial_t\varphi + \varphi\,\partial_t\psi
+  = \eps\bigl(\psi\Delta\varphi - \varphi\Delta\psi\bigr)
+  = \eps\,\nabla\!\cdot\!\bigl(\psi\nabla\varphi - \varphi\nabla\psi\bigr).
+\end{equation}
+The Fokker--Planck constraint $\partial_t\rho + \nabla\!\cdot\!m
+= \eps\Delta\rho$ then forces
+\begin{equation}
+  \nabla\!\cdot\!m
+  = \eps\Delta(\varphi\psi) - \eps\nabla\!\cdot\!(\psi\nabla\varphi - \varphi\nabla\psi)
+  = \eps\,\nabla\!\cdot\!\bigl(\psi\nabla\varphi + \varphi\nabla\psi
+      - \psi\nabla\varphi + \varphi\nabla\psi\bigr),
+\end{equation}
+so that, up to a divergence-free field excluded by the no-flux walls,
+\begin{equation}
+  \boxed{\;m = 2\eps\,\varphi\,\nabla\psi\;}
+  \label{eq:momentum}
+\end{equation}
+On the staggered grid this is evaluated with $\varphi$ averaged and $\psi$
+differenced onto the interior $x$-nodes $x_{j+1/2}=j\dx$,
+\begin{equation}
+  m_{j+1/2}
+  = 2\eps\cdot\frac{\varphi_j+\varphi_{j+1}}{2}
+           \cdot\frac{\psi_{j+1}-\psi_j}{\dx},
+  \label{eq:momentumdisc}
+\end{equation}
+which is second-order accurate and vanishes at the walls whenever $\psi$ is
+extended evenly, as the Neumann condition requires.
+
+\section{The Neumann heat semigroup}
+
+Reflecting walls make the Laplacian's eigenfunctions cosines on the
+cell-centred grid, so the semigroup is diagonal in the DCT-II basis. With
+\code{grid.py}'s eigenvalues
+\begin{equation}
+  \lambda_j = \frac{2 - 2\cos(j\pi/n_x)}{\dx^2},
+  \qquad j = 0,\dots,n_x-1,
+  \label{eq:lambda}
+\end{equation}
+the action of $H_t = e^{\eps t\Delta}$ is a multiplication in transform space,
+\begin{equation}
+  \widehat{H_t[f]}(j) = e^{-\eps\lambda_j t}\,\hat f(j),
+\end{equation}
+implemented as an orthonormal DCT-II, a scaling, and an inverse
+(\code{HeatNeumann.apply\_time}). Two consequences matter downstream:
+
+\begin{itemize}
+  \item \textbf{$t$ is a continuous parameter.} Nothing fixes a time grid. The
+        trajectory can be evaluated at \emph{any} real $t\in[0,1]$ at the cost
+        of one transform pair, which is what lets one fit serve every $n_t$.
+  \item \textbf{The basis functions are $\cos(j\pi x)$}, sampled at the grid's
+        cell centres. The same series can therefore be summed at any $x$, not
+        only at the grid points --- \S\ref{sec:reduce} uses exactly this.
+\end{itemize}
+
+The projection \code{np.maximum(out, 0.0)} in \code{\_apply\_neumann} clips the
+round-off-level negative values the transform can produce; $\varphi,\psi$ are
+non-negative and are subsequently divided by.
+
+\section{The Sinkhorn iteration}
+
+Fixing \eqref{eq:marginals} is an alternating-projection (IPF) loop. Storing
+only the two endpoint factors $\varphi(0)$ and $\psi(1)$, one sweep is
+\begin{align}
+  \varphi(0) &\leftarrow \rho_0 / \psi(0), &
+  \varphi(1) &\leftarrow H_T[\varphi(0)], \\
+  \psi(1)    &\leftarrow \rho_1 / \varphi(1), &
+  \psi(0)    &\leftarrow H_T[\psi(1)],
+\end{align}
+terminating on the left-marginal residual
+$\sqrt{\dx}\,\|\varphi(0)\psi(0)-\rho_0\|_2 < \texttt{tol}$.
+
+\paragraph{One full-time kernel, not $n_t$ steps.} Each sweep applies $H_T$ for
+the \emph{whole} horizon $T=1$ in a single shot. This is deliberate:
+$\varphi(0)$ and $\psi(1)$ are narrow (each is a marginal divided by a
+slowly-varying factor), and one application of the exact semigroup to a narrow
+function is accurate at any $\eps$, whereas marching in $n_t$ small steps would
+compound truncation error. It also means the fit never sees $n_t$ or $\dt$ ---
+\code{sinkhorn\_fit} reads only $n_x$, $\dx$, $\rho_0$, $\rho_1$, $\lambda_x$.
+
+\paragraph{Fast convergence at large $\eps$ is correct, not degenerate.}
+The iteration typically converges in $2$--$7$ sweeps for $\eps\gtrsim10^{-2}$,
+reporting residuals near $10^{-15}$. This is the expected behaviour: the
+contraction rate of an IPF loop improves as the kernel mixes more, and
+$e^{-\eps\pi^2}=5.2\times10^{-5}$ at $\eps=1$ means $H_T$ is close to a
+rank-one averaging operator, for which the fixed point is reached almost
+immediately. It is worth stating plainly because the symptom invites the
+opposite reading: a very fast ``converged'' is easily mistaken for a trivial
+fixed point. It is not one --- the resulting reference's \emph{interior} FP
+residual converges cleanly under refinement (at $\eps=1$, from
+$2.5\times10^{-4}$ at $n_t=512$ to $4.6\times10^{-6}$ at $n_t=8192$).
+
+\section{Reusing one fit across grids}
+\label{sec:reduce}
+
+The fit is run once per $\eps$ on a fine grid
+(\code{SINKHORN\_NX\_FINE}~$=4096$) so that the reference carries as little of
+its own discretisation error as possible; the alternative --- fitting on each
+test grid --- would contaminate the measured LADMM error with the reference's
+$O(\dx^2)$ error at the same resolution. Time costs nothing: the trajectory is
+evaluated directly at each grid's own edge times $k\dt$ and cell-centre times
+$(k-\tfrac12)\dt$. \textbf{Space is the problem.}
+
+\subsection{The consistency requirement}
+
+The solver reproduces its marginals \emph{exactly} at $t=0$ and $t=1$: the
+boundary data is baked into the affine map $A$, not solved for. So whatever the
+reference says at the endpoints is compared against $\rho_0,\rho_1$ as
+\code{setup\_problem} built them,
+\begin{equation}
+  \rho_0 = \frac{\texttt{pdf}(x_c)}{\sum \texttt{pdf}(x_c)\,\dx},
+  \qquad x_c = \bigl(i-\tfrac12\bigr)\dx,
+  \label{eq:solvermarginal}
+\end{equation}
+a \emph{pointwise} cell-centre sample. Any reference that discretises the same
+continuous marginal differently will disagree at the endpoints by the
+difference of the two conventions, and that disagreement is a floor no amount
+of LADMM convergence can remove.
+
+\subsection{Exact subsampling is impossible}
+
+The natural wish is to choose $n_x^{\text{fine}}$ so that every test grid's
+points are a subset of the fine grid's. It cannot be done. A cell-centred grid
+on $[0,1]$ places its points at
+\begin{equation}
+  x_i = \frac{i-\tfrac12}{n_x} = \frac{2i-1}{2n_x},
+\end{equation}
+i.e. only at \emph{odd} multiples of $1/(2n_x)$.
+
+\begin{lemma}
+The cell centres of an $n_x$-grid and a $2n_x$-grid share no point.
+\end{lemma}
+\begin{proof}
+A shared point would need $\tfrac{2i-1}{2n_x} = \tfrac{2i'-1}{4n_x}$, i.e.
+$2(2i-1) = 2i'-1$: an even number equal to an odd one.
+\end{proof}
+
+\noindent
+Verified directly for $32\!\leftrightarrow\!64$, $64\!\leftrightarrow\!128$ and
+$128\!\leftrightarrow\!256$: zero shared points in each case. Coarse centres
+coincide with fine centres exactly when the factor $n_x^{\text{fine}}/n_x$ is
+\emph{odd}, and since $\text{factor}(2n_x)=\text{factor}(n_x)/2$, at most one
+$n_x$ in a doubling sweep can qualify. At $n_x^{\text{fine}}=4096$ every factor
+for $n_x\in\{32,64,128,256\}$ is even, and no other choice helps.
+
+The staggered $x$-grid is the opposite case and needs no work: $m$ lives at
+$x_j = j\dx$, and \emph{node} grids \emph{are} nested, so
+\code{\_coarsen\_mx} subsamples exactly by picking the aligned fine point.
+Only $\rho$ is affected.
+
+\subsection{The trigonometric interpolant}
+
+Let $N=n_x^{\text{fine}}$ and let the fine cell centres be
+\begin{equation}
+  \xi_m = \frac{m-\tfrac12}{N},\qquad m = 1,\dots,N .
+\end{equation}
+The functions $\cos(j\pi x)$, $j=0,\dots,N-1$, are orthogonal with respect to
+the discrete inner product $\langle f,g\rangle=\sum_{m}f(\xi_m)g(\xi_m)$, and
+with the normalisation
+\begin{equation}
+  \beta_0 = \frac{1}{\sqrt N},
+  \qquad
+  \beta_j = \sqrt{\frac{2}{N}}\quad (j\ge1),
+\end{equation}
+they are orthonormal. The DCT-II coefficients of a grid function are therefore
+\begin{equation}
+  \hat f_j = \beta_j\sum_{m=1}^{N} f(\xi_m)\cos\!\left(j\pi\xi_m\right),
+  \qquad j = 0,\dots,N-1,
+  \label{eq:dctfwd}
+\end{equation}
+and the inverse transform recovers the samples,
+\begin{equation}
+  f(\xi_m) = \sum_{j=0}^{N-1}\beta_j\,\hat f_j\cos\!\left(j\pi\xi_m\right).
+  \label{eq:dctinv}
+\end{equation}
+
+The essential observation is that the right-hand side of \eqref{eq:dctinv} is a
+finite cosine series in $x$, and a finite cosine series is defined at every
+point of $[0,1]$, not only at the $\xi_m$. Define
+\begin{equation}
+  \boxed{\;
+  (\mathcal{I}f)(x) := \sum_{j=0}^{N-1}\beta_j\,\hat f_j\cos\!\left(j\pi x\right),
+  \qquad x\in[0,1].\;}
+  \label{eq:interpolant}
+\end{equation}
+
+\begin{fact}
+$\mathcal{I}f$ is the unique element of
+$V_N := \operatorname{span}\{\cos(j\pi x)\}_{j=0}^{N-1}$ with
+$(\mathcal{I}f)(\xi_m)=f(\xi_m)$ for every $m$.
+\end{fact}
+\begin{proof}
+$\dim V_N = N$ and there are $N$ collocation conditions; the matrix of the
+conditions is $\bigl[\beta_j\cos(j\pi\xi_m)\bigr]_{jm}$, which is orthogonal by
+the discrete orthogonality above, hence invertible.
+\end{proof}
+
+\noindent
+So $\mathcal{I}$ is interpolation, not smoothing or averaging: it reproduces the
+fine data exactly and interpolates between the fine points with the same
+cosines the problem is already written in. The reduction to a coarse grid is
+then simply evaluation,
+\begin{equation}
+  \rho^{(n_x)}_i = (\mathcal{I}\rho^{\text{fine}})(x_i),
+  \qquad x_i = \frac{i-\tfrac12}{n_x},
+  \label{eq:spectralreduce}
+\end{equation}
+and \eqref{eq:spectralreduce} places no constraint whatsoever on the relation
+between $n_x$ and $N$ --- in particular it needs no shared points, so the
+obstruction of \S\ref{sec:reduce} simply does not arise.
+
+\subsection{Why this is the natural operator here}
+
+Two reasons, beyond the absence of a parity condition.
+
+First, $V_N$ is the eigenspace of the very operator that generates the
+trajectory. The semigroup acts diagonally,
+\begin{equation}
+  H_t\bigl[\cos(j\pi\,\cdot)\bigr] = e^{-\eps\lambda_j t}\cos(j\pi\,\cdot),
+\end{equation}
+so each Hopf--Cole factor is, at every time, an element of $V_N$ with known
+coefficients. Evaluating it at an arbitrary $x$ through \eqref{eq:interpolant}
+is the exact spatial counterpart of evaluating it at an arbitrary $t$ through
+the factor $e^{-\eps\lambda_j t}$: both are exact evaluations of the same finite
+representation, and neither introduces a new approximation.
+
+\begin{remark}
+Strictly, this exactness applies to $\varphi$ and $\psi$ individually. Their
+product $\rho=\varphi\psi$ lies in $V_{2N}$ rather than $V_N$, so applying
+$\mathcal{I}$ to samples of $\rho$ interpolates rather than reproduces it, with
+an aliasing error governed by the cosine coefficients of $\rho$ beyond index
+$N$. Applying $\mathcal{I}$ to the two factors and multiplying afterwards avoids
+even that. For the densities of interest the distinction is immaterial: with
+$N=4096$ and $\sigma=0.05$ the relevant coefficient tail is of size
+$e^{-(N\pi\sigma)^2/2}$, and the measured agreement with the analytic marginal
+is at the level of $10^{-15}$.
+\end{remark}
+
+Second, the accuracy is controlled by a coefficient tail rather than by a power
+of the grid spacing. If $c_j$ denote the true cosine coefficients of $f$ under
+even extension, then
+\begin{equation}
+  \bigl\|f-\mathcal{I}f\bigr\|_\infty \;\le\; 2\sum_{j\ge N}\lvert c_j\rvert ,
+  \label{eq:tailbound}
+\end{equation}
+so the error inherits the smoothness of $f$ directly. For a Gaussian of width
+$\sigma$ the coefficients decay as
+$\lvert c_j\rvert\sim e^{-(j\pi\sigma)^2/2}$, and \eqref{eq:tailbound} is
+governed by $e^{-(N\pi\sigma)^2/2}$ --- for $N=4096$, $\sigma=0.05$ an exponent
+of order $-2\times10^{5}$. This is why the spectral column of
+Table~\ref{tab:reduce} sits at machine precision rather than at any power of
+$h$.
+
+\subsection{The two alternatives, and what they cost}
+
+Both alternatives are legitimate discretisations; the point is that neither
+agrees with \eqref{eq:solvermarginal}, which is what the comparison requires.
+
+\paragraph{Cell averaging.} Replacing the point value by the mean over the
+coarse cell,
+\begin{equation}
+  (\mathcal{A}f)_i = \frac{1}{\dx}\int_{x_i-\dx/2}^{x_i+\dx/2} f(x)\,dx ,
+\end{equation}
+and expanding $f$ about $x_i$ gives
+\begin{equation}
+  (\mathcal{A}f)_i = f(x_i) + \frac{\dx^2}{24}f''(x_i) + O(\dx^4).
+  \label{eq:avgerror}
+\end{equation}
+The discrepancy with the point value is thus $O(\dx^2)$ in the \emph{coarse}
+spacing, with a constant proportional to $f''$. For a bump of width $\sigma$,
+$f''\sim f/\sigma^2$, so the relative error scales as $\dx^2/\sigma^2$ --- not
+small when $\dx$ is comparable to $\sigma$, which is precisely the regime these
+test grids occupy.
+
+\paragraph{Two-point interpolation.} When the ratio $N/n_x$ is even, each coarse
+centre falls exactly midway between two fine centres (\S\ref{sec:reduce}), and
+the average of those two neighbours is linear interpolation at that midpoint,
+with error
+\begin{equation}
+  \tfrac18\,\dx_{\text{fine}}^2\,f''+O(\dx_{\text{fine}}^4).
+  \label{eq:lininterperror}
+\end{equation}
+The contrast with \eqref{eq:avgerror} is the whole story: this error is governed
+by the \emph{fine} spacing $1/N$, not the coarse one. It is therefore both very
+small and --- a useful check on \eqref{eq:lininterperror} --- essentially
+independent of $n_x$, which is exactly what the middle column of
+Table~\ref{tab:reduce} shows: the same value $6.131\times10^{-6}$ at every test
+resolution.
+
+\begin{table}[htbp]
+\centering
+\caption{Discrepancy between the reduced reference marginal and the solver's own
+$\rho_1$ of \eqref{eq:solvermarginal}, for $\sigma=0.05$ and $N=4096$. The
+averaging column is $O(\dx^2)$ in the coarse spacing; the interpolation column
+is $O(N^{-2})$ and hence flat; the spectral column is at machine precision.}
+\label{tab:reduce}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+$n_x$ & cell average $\mathcal{A}$ & two-point interpolation & spectral $\mathcal{I}$ \\
+\midrule
+32  & 3.307e-02 & 6.131e-06 & 1.546e-15 \\
+64  & 8.343e-03 & 6.131e-06 & 1.432e-15 \\
+128 & 2.089e-03 & 6.131e-06 & 2.148e-15 \\
+256 & 5.210e-04 & 6.131e-06 & 4.776e-15 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent
+The averaging column is $34.2\,\dx^2$, constant to three digits across the
+sweep, in agreement with \eqref{eq:avgerror}.
+
+\subsection{Fitting on the test grid instead}
+\label{sec:samenx}
+
+Everything above concerns reducing a fine fit. The alternative is to drop the
+reduction entirely and fit on the solver's own spatial grid. The two choices
+are not competitors; they measure different quantities.
+
+Fitting at $n_x^{\text{fine}}$ makes the reference approximately the
+\emph{continuum} bridge, so the measured discrepancy is the solver's total
+discretisation error --- what a convergence study needs. The cost is that the
+reference's own evolution uses the fine Laplacian while the solver's uses the
+coarse one, and the two differ at $O(\dx^2)$; that difference is what
+\eqref{eq:twoterm} amplifies at the endpoints.
+
+Fitting at $n_x$ removes that difference by construction. Three things follow.
+The reduction step disappears, so none of \S\ref{sec:reduce} applies. The
+marginals coincide exactly, because the fit is driven by the solver's own
+$\rho_0,\rho_1$ of \eqref{eq:solvermarginal}. And --- the useful part --- the
+Fokker--Planck constraint and the Sinkhorn reference then share a spatial
+discretisation, both being diagonalised by the same $\lambda_j$ of
+\eqref{eq:lambda}. Since the semigroup is exact in time, the reference's FP
+residual must then vanish as $\dt\to0$ at fixed $\dx$, leaving only the
+solver's \emph{temporal} error. It does, at second order:
+
+\begin{center}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+$n_t$ ($n_x=128$, $\eps=0.1$) & fine fit, interior & same-grid fit, interior \\
+\midrule
+128  & 5.360e-04 & 1.708e-04 \\
+512  & 3.685e-04 & 1.318e-05 \\
+2048 & 3.584e-04 & 8.679e-07 \\
+8192 & 3.594e-04 & 5.498e-08 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent
+The fine-fit column plateaus at the fixed spatial error of the $n_x=128$ grid;
+the same-grid column converges to zero. The same contrast holds at the $t=0$
+row, where the fine fit's residual \emph{grows} ($1.6\times10^{-1}$ to
+$4.8\times10^{-1}$ over that sweep, the $O(\dx^2/\dt)$ term of
+\eqref{eq:twoterm}) while the same-grid fit's falls to $6.2\times10^{-5}$.
+
+The limitation is the mirror image of the benefit: a reference that is
+spatially consistent with the solver by construction is \emph{blind} to
+spatial error, and cannot support any claim about convergence in $\dx$. Use
+the fine fit for convergence studies and the same-grid fit for isolating the
+time discretisation.
+
+\section{The failure this caused}
+
+\code{coarsen\_rho} was the original behaviour, and its $O(\dx^2)$ mismatch
+produced a spurious error floor at \emph{both} endpoints --- present only above
+\code{SINKHORN\_VAREPS\_THRESHOLD}, since below it the analytic reference uses
+the same pointwise convention as \eqref{eq:solvermarginal} and no mismatch
+arises.
+
+The effect is much worse when the reference is inspected through the FP
+residual rather than through $\|\rho-\rho_{\text{ref}}\|$, because the terminal
+constraint row divides by $\dt$:
+\begin{equation}
+  \text{last-row residual}
+  \;\sim\; \underbrace{\frac{34.2\,\dx^2}{\dt}}_{\text{convention mismatch}}
+  \;+\; \underbrace{B(\eps)\,\dt}_{\text{scheme}} .
+  \label{eq:twoterm}
+\end{equation}
+The first term \emph{grows} as $\dt\to0$ at fixed $\dx$. Measured at
+$\eps=10^{-2}$, $n_x=256$: the last-row residual ran
+$0.063\to0.124\to0.257\to0.523$ for $n_t=128,256,512,1024$ --- a clean factor
+$2$ per halving of $\dt$, and \eqref{eq:twoterm} predicts
+$34.2\cdot256^{-2}\cdot1024 = 0.53$ against the observed $0.523$. Switching to
+either non-averaging reduction removes it:
+
+\begin{center}
+\begin{tabular}{@{}llrrr@{}}
+\toprule
+$\eps$ & $n_t$ ($n_x=128$) & \code{"average"} & \code{"pointwise"} & \code{"spectral"} \\
+\midrule
+$0.01$ & 128  & 2.326e-01 & 4.323e-02 & 4.332e-02 \\
+$0.01$ & 512  & 1.029e+00 & 2.311e-02 & 2.351e-02 \\
+$0.01$ & 2048 & 4.237e+00 & 2.351e-02 & 2.259e-02 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent
+\code{"average"} diverges; the other two converge. Note also that spectral and
+pointwise are numerically indistinguishable in this test --- the $6\times
+10^{-6}$ interpolation error is far below everything else. The fix that
+mattered was \emph{away from block averaging}; spectral is preferred because it
+is the principled construction (no operator, any $n_x$, exact), not because it
+moves these numbers.
+
+\paragraph{What it does not explain.} The second term of \eqref{eq:twoterm}
+survives every reduction: at $\eps=1$, $n_t=2048$ the last-row residual is
+$4.18\times10^{1}$ under all three. That term is a property of the ETD terminal
+row, not of the reference, and is analysed in
+\code{etd\_theta\_projection.tex}~\S9.
+
+\section{Practical guidance}
+
+\begin{itemize}
+  \item The three reductions of \S\ref{sec:reduce} are selected by
+        \code{reference\_solution}'s \code{rho\_reduce} argument, with values
+        \code{"spectral"} ($\mathcal{I}$, the default, eq.~\eqref{eq:spectralreduce}),
+        \code{"pointwise"} (two-point interpolation, eq.~\eqref{eq:lininterperror})
+        and \code{"average"} ($\mathcal{A}$, eq.~\eqref{eq:avgerror}). Leave it at
+        the default; use \code{"average"} only to reproduce pre-fix numbers.
+  \item \code{SINKHORN\_NX\_FINE} must be an integer multiple of every $n_x$ in
+        the sweep. It no longer needs any parity property, and is irrelevant
+        under the same-grid option of \S\ref{sec:samenx}.
+  \item The two fitting grids are selected by
+        \code{study\_utils.sinkhorn\_reference\_fit}'s \code{grid} argument
+        (\code{"fine"} or \code{"same"}), surfaced as \code{--sinkhorn-grid} in
+        \code{sb\_gaussian.py} and \code{sb\_gaussian\_nonuniform.py}. The
+        same-grid option is fitted per resolution by necessity, which is cheap:
+        the iteration needs only a handful of sweeps.
+  \item Fit once per $\eps$, not once per resolution --- \code{sinkhorn\_fit}
+        does not depend on $n_t$, and \code{reference\_solution} takes the fit
+        as an argument precisely so it can be shared. Note that
+        \code{run\_study} refits internally per call, so comparing two schemes
+        through it repeats the fine-grid solve; \code{compare\_etd1\_vs\_theta.py}
+        fits once and passes it down instead.
+  \item The reference still carries its own $O(\dx_{\text{fine}}^2)$ error. At
+        $n_x^{\text{fine}}=4096$ against test grids up to $256$ that is
+        $\sim\!256$ times smaller than the quantity being measured, but it is
+        not zero, and it is the floor on any convergence study run against it.
+  \item Below \code{SINKHORN\_VAREPS\_THRESHOLD} the analytic reference is used
+        and none of \S\ref{sec:reduce} applies; it is evaluated directly on the
+        test grid.
+\end{itemize}
+
+\end{document}

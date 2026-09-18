@@ -45,3 +45,9 @@ Thumbs.db
 # Video files
 *.mp4
 *.avi
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

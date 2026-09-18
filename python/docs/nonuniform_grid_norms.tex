@@ -1,0 +1,489 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{listings}
+
+\geometry{margin=1.1in}
+
+\newtheorem{lemma}{Lemma}
+\newtheorem{fact}{Fact}
+
+\newcommand{\eps}{\varepsilon}
+\newcommand{\dt}{\Delta t}
+\newcommand{\dx}{\Delta x}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  columns=fullflexible,
+  keepspaces=true,
+  breaklines=true,
+  frame=single,
+}
+
+\title{The ADMM Norms: $M$, $N$, and the Adjoint of $A$}
+\author{Optimal Transport / Schr\"odinger Bridge Project\\
+Companion to \code{nonuniform\_grid\_xy\_variables.tex} (Steps 1--5)}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Continues \code{nonuniform\_grid\_xy\_variables.tex}, which pinned down (Steps 1--5,
+confirmed) the two grids, $f_1,f_2$, and the linear consensus map $A(q,b)=(\bar{\mathbf
+I}_tq,\bar{\mathbf I}_xb)$, and left one thing open: the inner products
+$\langle\cdot,\cdot\rangle_\mathcal{X},\langle\cdot,\cdot\rangle_\mathcal{Y}$ (that
+document's $\mathcal X,\mathcal Y$; this note calls their matrices $N,M$ respectively, to
+match ongoing discussion). This note (a) writes down $M,N$ concretely -- the
+quadrature-consistent Riemann-sum norms, already sitting in \code{pipeline\_nu.py} as a
+\emph{diagnostic}, here promoted to the actual ADMM metric; (b) derives $A^*$, the
+$N,M$-weighted adjoint of $A$, in closed form; (c) proves $\|A^*A\|_N\le1$
+\emph{exactly}, for any grid in this family, giving an unconditional (not
+grid-tuned) stability bound $\tau>\gamma$ for \S9's linearized-ADMM iteration.
+
+A companion draft, \code{norms\_in\_ladmm.tex} (older notation: half-integer indices,
+$\mathcal A,\tilde\rho$), independently derives the same weighted-average formula for the
+time-averaging adjoint (its Step 5b) via direct coefficient-collection rather than the
+general adjoint formula used here -- a useful cross-check, reached two different ways.
+\end{abstract}
+
+%------------------------------------------------------------------------------
+\section{Setup: $M$, $N$, and $A$, restated}
+\label{sec:setup}
+%------------------------------------------------------------------------------
+
+Notation and indices exactly as in \code{nonuniform\_grid\_xy\_variables.tex}: $q\in
+\mathbb R^{(n_t-1)n_x}$ at $(t_j,\xi_k)$, $j=1,\ldots,n_t-1$; $b\in\mathbb
+R^{n_t(n_x-1)}$ at $(\tau_i,x_k)$, $i=0,\ldots,n_t-1$; $\rho,m\in\mathbb R^{n_tn_x}$ at
+$(\tau_i,\xi_k)$ (its ambient-space equation, \S1). $\dt_i:=t_{i+1}-t_i$
+($i=0,\ldots,n_t-1$, the primal/cell widths); $\dt_j^{\mathrm{dual}}:=\tfrac12(\dt_{j-1}
++\dt_j)$ ($j=1,\ldots,n_t-1$, the dual-mesh cell widths -- \S8.3's $r_t$/$\bar{\mathbf
+I}_t$ construction, and the ``dual grid'' discussion from the same thread).
+
+\textbf{$M$ (collocated/$y$-grid norm):}
+\begin{equation}
+  \|(\rho,m)\|_M^2 = \dx\sum_{i,k}\dt_i\,\rho_{i,k}^2 \;+\; \dx\sum_{i,k}\dt_i\,m_{i,k}^2,
+  \qquad
+  M = \begin{pmatrix}\mathrm{diag}(\dt_i)\otimes\dx I_{n_x} & 0 \\ 0 & \mathrm{diag}(\dt_i)\otimes\dx I_{n_x}\end{pmatrix}.
+\end{equation}
+
+\textbf{$N$ (staggered/$x$-grid norm):}
+\begin{equation}
+  \|(q,b)\|_N^2 = \dx\sum_{j,k}\dt_j^{\mathrm{dual}}\,q_{j,k}^2 \;+\; \dx\sum_{i,k}\dt_i\,b_{i,k}^2,
+  \qquad
+  N = \begin{pmatrix}\mathrm{diag}(\dt_j^{\mathrm{dual}})\otimes\dx I_{n_x} & 0 \\ 0 & \mathrm{diag}(\dt_i)\otimes\dx I_{n_x-1}\end{pmatrix}.
+\end{equation}
+
+Both are literally \code{pipeline\_nu.py}'s \code{norm\_fn}/\code{dual\_norm\_fn}
+(\code{\_weighted\_sq\_sum}) -- currently used only to \emph{measure} convergence, not to
+\emph{run} the iteration. This note's point is to promote them to the actual metric.
+
+\textbf{$A$ (consensus map, linear part):} $A(q,b)=(\bar{\mathbf I}_tq,\bar{\mathbf
+I}_xb)$, where (\code{nonuniform\_grid\_xy\_variables.tex} §8.3, §10)
+\begin{equation}
+  (\bar{\mathbf I}_tq)_i = \tfrac12(q_i+q_{i+1}),\ i=0,\ldots,n_t-1\ (q_0:=q_{n_t}:=0),
+  \qquad
+  (\bar{\mathbf I}_xb)_k = \tfrac12(b_{k-1}+b_k),\ k=1,\ldots,n_x\ (b_0:=b_{n_x}:=0),
+\end{equation}
+each acting independently per space-column ($\bar{\mathbf I}_t$) or per time-row
+($\bar{\mathbf I}_x$) -- $q_0,q_{n_t},b_0,b_{n_x}$ set to $0$ here since this is the
+\emph{linear} part only (the affine boundary contribution is $A$'s companion, $d$, not
+part of $A$ itself).
+
+%------------------------------------------------------------------------------
+\section{The weighted adjoint, in general}
+\label{sec:adjoint-general}
+%------------------------------------------------------------------------------
+
+$A^*:\mathcal Y\to\mathcal X$ is defined by $\langle Ax,v\rangle_M=\langle x,A^*v
+\rangle_N$ for all $x,v$. Writing $A$'s plain (array-index) matrix as $A$ too (abuse of
+notation): $\langle Ax,v\rangle_M=x^TA^TMv\stackrel!=x^TNA^*v$ for all $x$, so
+\begin{equation}
+  \label{eq:adjoint-formula}
+  A^* = N^{-1}A^TM.
+\end{equation}
+$N$ is SPD (diagonal, strictly positive entries), hence invertible -- always well-defined.
+
+%------------------------------------------------------------------------------
+\section{Reduction to two independent 1D problems}
+\label{sec:reduction}
+%------------------------------------------------------------------------------
+
+$A$ has no cross terms between $(q\to\rho)$ and $(b\to m)$, and $M,N$ respect this same
+split -- so $A^*$ splits the same way, $A^*(\rho,m)=(A_t^*\rho,\,A_x^*m)$. Within each
+block, the averaging operator acts independently across many parallel ``copies'' ($n_x$
+space-columns for $\bar{\mathbf I}_t$, $n_t$ time-rows for $\bar{\mathbf I}_x$), and in
+both cases the weight on the axis \emph{not} being acted on is identical on the domain
+and codomain side (space's $\dx$ for the $q\to\rho$ block; time's $\dt_i$, row by row, for
+the $b\to m$ block). The following lemma says that's exactly the condition under which the
+many copies don't interact -- the full weighted adjoint (and its norm) reduces to the
+\emph{single} 1D averaging matrix's.
+
+\begin{lemma}[Parallel copies don't change the weighted operator norm]
+\label{lem:copies}
+Let $P:\mathbb R^p\to\mathbb R^q$ be linear, $D_1,D_2$ SPD on $\mathbb R^p,\mathbb R^q$.
+For $r$ independent copies of $P$ (i.e.\ $P\otimes I_r$ on $\mathbb R^{pr}$), weighted by
+$D_1\otimes C$ on the domain and $D_2\otimes C$ on the codomain, $C:=\mathrm{diag}(c_1,
+\ldots,c_r)$ \textbf{the same} per-copy scalars on both sides:
+\[
+  \|P\otimes I_r\|_{D_1\otimes C\to D_2\otimes C} = \|P\|_{D_1\to D_2}.
+\]
+\end{lemma}
+\begin{proof}
+The squared norm is the top generalized eigenvalue of $(D_1\otimes C)^{-1}(P\otimes
+I_r)^T(D_2\otimes C)(P\otimes I_r) = (D_1^{-1}\otimes C^{-1})(P^TD_2P\otimes C) =
+D_1^{-1}P^TD_2P\otimes I_r$ (the $C^{-1}C=I_r$ cancellation is exactly where ``same
+scalars on both sides'' is used), whose eigenvalues are those of $D_1^{-1}P^TD_2P$, each
+with multiplicity $r$.
+\end{proof}
+
+Applying Lemma~\ref{lem:copies}: the $q\to\rho$ block reduces to $\bar{\mathbf I}_t:
+(\mathbb R^{n_t-1},N_t)\to(\mathbb R^{n_t},M_t)$ with $N_t=\mathrm{diag}(\dt_j^{
+\mathrm{dual}})$, $M_t=\mathrm{diag}(\dt_i)$ ($c_k=\dx$, same for every space column
+$k$); the $b\to m$ block reduces to $\bar{\mathbf I}_x:(\mathbb R^{n_x-1},\dx
+I)\to(\mathbb R^{n_x},\dx I)$ ($c_i=\dt_i$, same for every time row $i$, since $b,m$
+share the identical time weight at each row).
+
+%------------------------------------------------------------------------------
+\section{$A_t^*$, explicitly}
+\label{sec:At}
+%------------------------------------------------------------------------------
+
+$A_t^*=N_t^{-1}\bar{\mathbf I}_t^TM_t$. Column $j$ of $\bar{\mathbf I}_t$ is nonzero
+(value $\tfrac12$) in rows $j-1,j$ only, so
+\begin{equation}
+  \label{eq:At-star}
+  (A_t^*v)_j \;=\; \frac{1}{\dt_j^{\mathrm{dual}}}\Bigl[\tfrac12\dt_{j-1}v_{j-1}+\tfrac12
+  \dt_jv_j\Bigr] \;=\; \frac{\dt_{j-1}v_{j-1}+\dt_jv_j}{\dt_{j-1}+\dt_j}, \qquad
+  j=1,\ldots,n_t-1.
+\end{equation}
+A \emph{width-weighted} average of $v$'s two flanking cells -- not the plain $\tfrac12,
+\tfrac12$ average. It reduces to the plain average exactly when $\dt_{j-1}=\dt_j$
+(locally uniform), and only then -- exactly the condition under which
+\code{nonuniform\_grid\_refine\_ends.tex}'s ``\code{interp\_t\_at\_rho}: an accuracy
+caveat'' section found the plain average's error vanishing. This is not a coincidence:
+\eqref{eq:At-star} is \emph{forced} by $M,N$ once $A^*$ is required to be their genuine
+adjoint (Fact~\ref{fact:not-coincidence} below makes this precise), the same
+``structural, not approximate'' character \code{nonuniform\_grid\_refine\_ends.tex}
+\S5 already claimed for the \emph{Euclidean} adjoint on the uniform grid.
+
+\begin{fact}
+\label{fact:not-coincidence}
+No single scalar $c$ satisfies $A_t^*=c\cdot\bar{\mathbf I}_t^T$. $\bar{\mathbf
+I}_t^T$ weighs $v_{j-1}:v_j$ in the fixed ratio $1:1$ at every $j$; $A_t^*$ weighs them
+$\dt_{j-1}:\dt_j$, a ratio that changes from edge to edge on a graded grid. A fixed $1:1$
+ratio scaled by any single $c$ cannot match a ratio that varies with $j$.
+\end{fact}
+
+\subsection*{Against the code}
+
+\code{operators\_nu.py}'s \code{interp\_t\_at\_rho} -- called by \code{pipeline\_nu.py}'s
+\code{At\_fn}, which builds the gradient \code{g} \emph{every} LADMM iteration, not just
+inside the projection -- is
+\begin{lstlisting}[language=Python]
+def interp_t_at_rho(in_arr):
+    return 0.5 * (in_arr[:-1] + in_arr[1:])
+\end{lstlisting}
+the plain average, i.e.\ the Euclidean transpose $\bar{\mathbf I}_t^T$, not
+\eqref{eq:At-star}. Fact~\ref{fact:not-coincidence}: this is not off by a rescaling, it is
+a genuinely different operator on any grid where consecutive $\dt_i$ differ -- which, for
+Chebyshev clustering, is \emph{every} interior edge (unlike
+\code{refine\_ends\_time\_grid}'s two isolated junctions).
+
+%------------------------------------------------------------------------------
+\section{$A_x^*$, explicitly}
+\label{sec:Ax}
+%------------------------------------------------------------------------------
+
+Same computation with $\dx$ constant on both sides -- it cancels entirely:
+\begin{equation}
+  A_x^* = \bar{\mathbf I}_x^T, \qquad (A_x^*m)_k = \tfrac12(m_k+m_{k+1}).
+\end{equation}
+Identical to \code{operators\_nu.py}'s \code{interp\_x\_at\_m\_adj} (via
+\code{interp\_x\_at\_phi} at zero BC) as coded today -- \textbf{no change needed here}.
+Consistent with every earlier finding in this project: space, being uniform, never needed
+correcting; only the time-direction adjoint does.
+
+%------------------------------------------------------------------------------
+\section{Bounding $\|A^*A\|_N$}
+\label{sec:bound}
+%------------------------------------------------------------------------------
+
+\begin{fact}
+\label{fact:AstarA}
+For any bounded linear $A$ between real inner-product spaces, $\|A^*A\|_N=\|A\|_{
+\mathcal X\to\mathcal Y}^2$.
+\end{fact}
+\begin{proof}
+$\langle A^*Ax,x\rangle_N=\|Ax\|_M^2\le\|A\|^2\|x\|_N^2$; $A^*A$ is self-adjoint and PSD
+w.r.t.\ $\langle\cdot,\cdot\rangle_N$, so its operator norm is its top Rayleigh quotient:
+$\|A^*A\|_N=\sup_x\langle A^*Ax,x\rangle_N/\|x\|_N^2=\sup_x\|Ax\|_M^2/\|x\|_N^2=\|A\|^2$.
+\end{proof}
+
+$A$ is block-diagonal across $(q,b)\to(\rho,m)$, and $M,N$ split the same way, so
+$\|A\|_{\mathcal X\to\mathcal Y}=\max\bigl(\|\bar{\mathbf I}_t\|_{N_t\to M_t},\,\|
+\bar{\mathbf I}_x\|_{\dx I\to\dx I}\bigr)$ (a Pythagorean argument: $\|Ax\|_M^2=\|
+\bar{\mathbf I}_tq\|_{M_t}^2+\|\bar{\mathbf I}_xb\|_{M_x}^2\le\max(\cdot)^2\bigl(\|q\|_{
+N_t}^2+\|b\|_{N_x}^2\bigr)=\max(\cdot)^2\|x\|_N^2$, tight by concentrating $x$ on
+whichever block attains the max).
+
+\begin{lemma}[Both blocks are $1$-Lipschitz]
+\label{lem:1lip}
+$\|\bar{\mathbf I}_t\|_{N_t\to M_t}\le1$ and $\|\bar{\mathbf I}_x\|_{\dx I\to\dx I}\le1$,
+for \emph{any} $\{\dt_i\}$ (uniform or not) and any $\dx$.
+\end{lemma}
+\begin{proof}
+Write $u_j:=q_j$ ($j=1,\ldots,n_t-1$, $u_0:=u_{n_t}:=0$ -- the linear-part convention of
+\S\ref{sec:setup}), $v_i:=(\bar{\mathbf I}_tq)_i=\tfrac12(u_i+u_{i+1})$. By
+Cauchy--Schwarz, $v_i^2\le\tfrac12(u_i^2+u_{i+1}^2)$, so
+\[
+  \sum_{i=0}^{n_t-1}\dt_iv_i^2 \;\le\; \tfrac12\sum_i\dt_i(u_i^2+u_{i+1}^2)
+  \;=\; \tfrac12\sum_{j=1}^{n_t-1}(\dt_{j-1}+\dt_j)u_j^2
+  \;=\; \sum_{j=1}^{n_t-1}\dt_j^{\mathrm{dual}}u_j^2,
+\]
+i.e.\ $\|\bar{\mathbf I}_tq\|_{M_t}^2\le\|q\|_{N_t}^2$ -- using only
+$\dt_j^{\mathrm{dual}}:=\tfrac12(\dt_{j-1}+\dt_j)$'s definition, nothing about
+uniformity. The $\bar{\mathbf I}_x$ case is the same argument with every weight equal to
+$\dx$ (the special case $\dt_{j-1}=\dt_j=\dx$ throughout).
+\end{proof}
+Essentially tight, not just a safe bound: a constant $q\equiv c$ pushes the ratio toward
+$1$ as boundary effects wash out.
+
+\begin{equation}
+  \label{eq:final-bound}
+  \boxed{\;\|A^*A\|_N \;\le\; 1,\quad\text{for any }n_t,n_x,\text{ any clustering.}\;}
+\end{equation}
+
+%------------------------------------------------------------------------------
+\section{Consequence: an unconditional stability bound}
+\label{sec:consequence}
+%------------------------------------------------------------------------------
+
+\code{nonuniform\_grid\_xy\_variables.tex} \S9's linearized-ADMM iteration needs
+$\tau>\gamma\|A\|_{\mathcal X\to\mathcal Y}^2$ for convergence (Fang--He--Liu--Yuan
+2015). By \eqref{eq:final-bound}, $\|A\|^2\le1$ \emph{exactly}, on every grid in this
+family -- so \textbf{$\tau>\gamma$ suffices unconditionally}: no per-grid retuning, no
+asymptotic argument, a genuine equality-free bound holding at every finite $n_t,n_x$ and
+every clustering strength. This is the first piece of the ``grid-independent ADMM''
+goal delivered as a proof rather than an aspiration -- contingent, of course, on actually
+switching the iteration's $A^*$ (\S\ref{sec:At}--\S\ref{sec:Ax}) and the projection's
+adjoint machinery over to $M,N$, which is not yet done.
+
+%------------------------------------------------------------------------------
+\section{Empirical note: why $R^*$ can't wait}
+\label{sec:empirical}
+%------------------------------------------------------------------------------
+
+Wiring $A_t^*$ into \code{pipeline\_nu.py}'s \code{At\_fn} alone -- leaving
+\code{projection\_nu.py}'s internal adjoint on the Euclidean metric -- was tried and
+reverted: it satisfies the adjoint identity (\S\ref{sec:At}, verified) and reduces to the
+old code on a uniform grid, but on an actual clustered grid
+(\code{sb\_gaussian\_nonuniform.py}, $n_t=n_x=64$) it made the LADMM iteration diverge
+(residuals $\sim10^{20}$), even though the projection still exactly enforced $R=0$
+throughout. Simplifying the $y$-update alone (\code{xy\_variables.tex} \S11.5, eq.\ 24)
+is stable but converges to a visibly worse answer than the unmodified solver
+($\sim$25$\times$ worse error against a Sinkhorn reference). The gradient step's adjoint
+and the projection's internal adjoint have to agree on one consistent metric for the
+linearized-ADMM majorization argument to hold -- these pieces are not independently
+swappable. Both reverts are documented in \code{prox\_nu.py}/\code{pipeline\_nu.py}'s
+current docstrings.
+
+%------------------------------------------------------------------------------
+\section{$R$'s weighted adjoint (the FP projection's remaining piece)}
+\label{sec:Rstar}
+%------------------------------------------------------------------------------
+
+\textbf{This section is a derivation to check, not a finished result.} \S\ref{sec:empirical}
+is why this piece must be right, and consistent with $A_t^*$, before anything here is
+implemented again. Unlike \S\ref{sec:At}'s $A_t^*$, nothing below has been checked
+against a numerical adjoint identity yet.
+
+\subsection{$R$'s Euclidean transpose, per building block}
+
+$R(Q,B) = \mathbf D_tQ + B\mathbf D_x^T - \varepsilon(\bar{\mathbf I}_tQ)\mathbf L_x^T$
+(\code{nonuniform\_grid\_xy\_variables.tex} \S8.3--8.4's matrices, $Q,B$ the matrix forms
+of $q,b$: $\mathbf D_t,\bar{\mathbf I}_t$ act by left-multiplication -- per space column
+-- and $\mathbf D_x,\mathbf L_x$ by right-multiplication -- per time row, exactly
+\S\ref{sec:reduction}'s convention). Taking the plain Euclidean (Frobenius) adjoint of
+each term ($\mathbf L_x=\mathbf L_x^T$, symmetric):
+\begin{equation}
+  \label{eq:R-transpose}
+  (R^T\Phi)_q = \mathbf D_t^T\Phi - \varepsilon\,\bar{\mathbf I}_t^T(\Phi\mathbf L_x),
+  \qquad
+  (R^T\Phi)_b = \Phi\mathbf D_x.
+\end{equation}
+This matches \code{projection\_nu.py} as coded today (up to the module's own
+already-verified sign convention, \code{deriv\_t\_at\_rho}$=-\mathbf D_t^T$ --
+see \code{validate\_nu.py}'s \code{check\_deriv\_t\_adjoint}):
+\begin{lstlisting}[language=Python]
+rho_correction = deriv_t_at_rho(phi) + vareps * interp_t_at_rho(deriv_x_at_phi(deriv_x_at_m(phi)))  # (R^T phi)_q
+mx_correction  = deriv_x_at_m(phi)                                                                     # (R^T phi)_b
+\end{lstlisting}
+
+\subsection{$R^*=N^{-1}R^TW$, for \emph{any} invertible $W$ -- the choice is irrelevant}
+
+\begin{lemma}[The codomain weight cancels]
+\label{lem:W-cancels}
+For any invertible $W$ (not just $W=I$), $R^*:=N^{-1}R^TW$ gives the \emph{same}
+projection formula as $W=I$:
+\[
+  v - R^*(RR^*)^{-1}(Rv-d) \;=\; v - N^{-1}R^T(RN^{-1}R^T)^{-1}(Rv-d), \qquad \forall\,W.
+\]
+\end{lemma}
+\begin{proof}
+Write $K:=RN^{-1}R^T$. Then $RR^*=RN^{-1}R^TW=KW$, so $(RR^*)^{-1}=(KW)^{-1}=W^{-1}K^{-1}$,
+and $R^*(RR^*)^{-1}=N^{-1}R^TW\cdot W^{-1}K^{-1}=N^{-1}R^TK^{-1}$ -- the $W,W^{-1}$ cancel
+identically, for any invertible $W$.
+\end{proof}
+So $R$'s codomain (the residual/dual-potential space, where $\phi$ lives) does not need
+its own weight assigned at all -- not because it \emph{has} none (it could just as well be
+$M$, since $\phi$ lives at the same points $\rho$ does), but because
+Lemma~\ref{lem:W-cancels} makes the choice provably immaterial to the projection this
+computes. Skipping it (equivalently: computing with $W=I$, the cheapest representative of
+every equally-valid choice) is not an approximation or a simplifying assumption:
+\begin{equation}
+  \label{eq:R-star}
+  R^* = N^{-1}R^T, \qquad
+  (R^*\Phi)_q = N_q^{-1}\Bigl[\mathbf D_t^T\Phi - \varepsilon\,\bar{\mathbf I}_t^T(\Phi
+  \mathbf L_x)\Bigr], \qquad
+  (R^*\Phi)_b = N_b^{-1}\bigl[\Phi\mathbf D_x\bigr],
+\end{equation}
+$N_q^{-1}$ applied once to the whole $q$-correction (not to each piece before combining
+-- linear, so the two give the same answer either way).
+
+\subsection{The $N^{-1/2}$ connection}
+
+Checking this against the whitening view directly answers ``isn't it just $N^{-1/2}$'':
+$\tilde R:=RN^{-1/2}$, $u:=N^{1/2}v$. Solve $\tilde R\tilde R^T\phi=\tilde Ru\,(=Rv$, since
+$\tilde Ru=RN^{-1/2}N^{1/2}v=Rv)$, then $x^*=N^{-1/2}(u-\tilde R^T\phi)=v-N^{-1}R^T\phi$.
+So: \emph{one} factor of $N^{-1/2}$ modifies $R$ itself (giving $\tilde R$), and it
+appears \emph{twice} once $\tilde R\tilde R^T$ is formed -- contributing $N^{-1}$
+overall, matching \eqref{eq:R-star} exactly. Not two independent $N^{-1/2}$'s; one,
+appearing on both sides of the assembled system.
+
+\subsection{What \code{\_probe\_composite\_ops} computes today}
+
+The module doesn't use \eqref{eq:R-transpose} in closed form -- it probes with unit
+vectors $v=e_j$ (module docstring: ``rather than hand-rederive the closed-form
+coefficients for a variable \code{dt\_vec}... this module builds the per-mode operator
+by literal substitution''):
+\begin{lstlisting}[language=Python]
+drho = ops.deriv_t_at_rho(v)      # (D_t^T v)-piece, sign per the module's convention
+irho = ops.interp_t_at_rho(v)      # (I_t^T v)-piece
+M0[:,j] = -ops.deriv_t_at_phi(drho, 0, 0)
+M1[:,j] = vareps*(ops.deriv_t_at_phi(irho,0,0) - ops.interp_t_at_phi(drho,0,0)) + v[:,0]
+M2[:,j] = ops.interp_t_at_phi(irho, 0, 0)
+\end{lstlisting}
+Cross-checked against \code{projection.py}'s closed form (uniform grid, $M0,M1,M2$'s
+role there): $M0$ is the ($q$-side, time-only) $\mathbf D_t\mathbf D_t^T$ contribution
+($2/\dt^2$ on the diagonal, matching \code{projection.py}'s \code{D[1:-1]}); the bare
+``\code{+ v[:,0]}'' in $M1$ is the ($b$-side) $\mathbf D_x\mathbf D_x^T$ contribution --
+DCT-diagonalized to a pure scalar eigenvalue $l_{x,k}$ (\code{projection.py}: plain
+``\code{+ lx}'' in \code{D[1:-1]}, no other factor), which is why it shows up as bare
+\code{v} (identity in time) rather than any $D_t$-built stencil -- there is no $\varepsilon$
+or $D_t$ dependence in that specific piece to probe; the rest of $M1$ and all of $M2$ are
+the diffusion term's self- and cross-interactions.
+
+\subsection{Solving the projection: the space eigenvalues survive untouched}
+\label{sec:space-survives}
+
+\eqref{eq:R-star} gives $R^*$; the projection itself needs $R(R^*\Phi)$ ($d=0$ for $R$
+specifically, the FP-feasible set being $\{Rx=0\}$, \code{xy\_variables.tex} \S8.4).
+Substitute \eqref{eq:R-star}'s
+$Q^*:=(R^*\Phi)_q,\,B^*:=(R^*\Phi)_b$ into $R(Q,B)=\mathbf D_tQ+B\mathbf D_x^T-
+\varepsilon(\bar{\mathbf I}_tQ)\mathbf L_x^T$ and expand every term:
+\begin{align}
+  \mathbf D_tQ^* &= \underbrace{\bigl[\mathbf D_t\mathbf N_q^{-1}\mathbf D_t^T\bigr]}_{\text{time-only}}\Phi
+    \;-\;\varepsilon\underbrace{\bigl[\mathbf D_t\mathbf N_q^{-1}\bar{\mathbf I}_t^T\bigr]}_{\text{time-only}}(\Phi\mathbf L_x), \label{eq:term1}\\
+  B^*\mathbf D_x^T &= \underbrace{\mathbf N_b^{-1}}_{\text{time-only}}\,\Phi(\mathbf D_x\mathbf D_x^T), \label{eq:term2}\\
+  -\varepsilon(\bar{\mathbf I}_tQ^*)\mathbf L_x^T &=
+    -\varepsilon\underbrace{\bigl[\bar{\mathbf I}_t\mathbf N_q^{-1}\mathbf D_t^T\bigr]}_{\text{time-only}}(\Phi\mathbf L_x)
+    \;+\;\varepsilon^2\underbrace{\bigl[\bar{\mathbf I}_t\mathbf N_q^{-1}\bar{\mathbf I}_t^T\bigr]}_{\text{time-only}}(\Phi\mathbf L_x^2). \label{eq:term3}
+\end{align}
+(Using $\mathbf N_q^{-1},\mathbf N_b^{-1}$ for the diagonal matrices $N_q,N_b$ act as --
+\S\ref{sec:reduction}'s left/right-multiplication convention; $\mathbf L_x=\mathbf L_x^T$.)
+\textbf{Every single term factors as (a time-only matrix, the same at every spatial
+mode) times $\Phi$, $\Phi\mathbf L_x$, or $\Phi\mathbf L_x^2$} -- and
+$\mathbf D_x\mathbf D_x^T,\mathbf L_x,\mathbf L_x^2$ are exactly the operators the
+\emph{current, unweighted} code already DCT-diagonalizes, with exactly the same
+eigenvalues $\lambda_{x,k},\lambda_{x,k}^2$ it already uses
+(\code{problem.lambda\_x}) -- $\mathbf N_q^{-1},\mathbf N_b^{-1}$ never appear inside a
+space-direction factor, only outside/beside one, because \eqref{eq:term1}--\eqref{eq:term3}
+never multiply a time matrix and a space matrix from the same side of $\Phi$. \textbf{This
+is the ``space part stays exactly the same'' you asked me to check: it does, term by
+term, not just plausibly.} After DCT-in-$x$, mode $k$'s reduced system is still exactly
+\begin{equation}
+  \label{eq:Tk-weighted}
+  \widetilde T_k = \widetilde M0 + \lambda_{x,k}\widetilde M1 + \lambda_{x,k}^2\widetilde M2,
+\end{equation}
+the same quadratic-in-$\lambda_{x,k}$ shape \code{precomp\_banded\_proj\_nu} already
+assembles -- only the (still exactly tridiagonal, since every piece above is built from
+compositions of the bidiagonal $\mathbf D_t,\bar{\mathbf I}_t$) time-direction matrices
+change:
+\begin{equation}
+  \label{eq:M-weighted}
+  \widetilde M0 = \mathbf D_t\mathbf N_q^{-1}\mathbf D_t^T, \qquad
+  \widetilde M2 = \bar{\mathbf I}_t\mathbf N_q^{-1}\bar{\mathbf I}_t^T, \qquad
+  \widetilde M1 = \pm\Bigl[\mathbf D_t\mathbf N_q^{-1}\bar{\mathbf I}_t^T+\bar{\mathbf I}_t
+  \mathbf N_q^{-1}\mathbf D_t^T\Bigr] + \mathbf N_b^{-1},
+\end{equation}
+$\widetilde M0,\widetilde M2$'s signs match \eqref{eq:term1}/\eqref{eq:term3} directly
+(both unambiguous); $\widetilde M1$'s $\pm$ is deliberately left open here -- see below.
+
+\subsection*{Where I got stuck, honestly}
+
+I tried to pin down $\widetilde M1$'s sign by hand, against the \emph{unweighted}
+($\mathbf N_q^{-1}\to I$) case, two ways, and they disagreed: my clean derivation
+above gives $-\varepsilon[\mathbf D_t\bar{\mathbf I}_t^T+\bar{\mathbf I}_t\mathbf D_t^T]$;
+reading the sign directly off the current code's \code{M1 = vareps*(deriv\_t\_at\_phi(irho)
+- interp\_t\_at\_phi(drho)) + v} (substituting \code{drho}$=-\mathbf D_t^Tv$,
+\code{irho}$=\bar{\mathbf I}_t^Tv$, the module's established sign convention) gives
+$+\varepsilon[\ldots]$. Chasing the discrepancy further, I found the module's own
+docstring already flags exactly this kind of trap: \code{deriv\_x\_at\_phi(deriv\_x\_at\_m(.))}
+(part of what feeds $\widetilde M1$'s $\lambda_x$-linear structure) has DCT eigenvalue
+\emph{$-\lambda_{x,k}$}, not $+\lambda_{x,k}$ -- ``verified numerically,'' per the module
+docstring, precisely \emph{because} hand-tracking it is error-prone. This is exactly the
+situation \code{\_probe\_composite\_ops} was built to avoid by construction (module
+docstring: ``easy to get a sign or index wrong with no way to self-check the
+algebra''), and I don't want to guess past it.
+
+\textbf{What doesn't depend on resolving this:} \emph{which} building blocks
+$N_q^{-1},N_b^{-1}$ multiply -- \code{drho}, \code{irho}, and the bare \code{+v} term,
+respectively, exactly \eqref{eq:M-weighted}'s structure -- is settled by
+\eqref{eq:term1}--\eqref{eq:term3} regardless of sign, since rescaling an already-correct
+quantity by a positive diagonal matrix cannot flip which pieces combine. So the code
+change is still exactly this (unchanged from before):
+\begin{lstlisting}[language=Python]
+drho = ops.deriv_t_at_rho(v) / dt_dual[:, None]     # N_q^{-1}, once
+irho = ops.interp_t_at_rho(v) / dt_dual[:, None]     # N_q^{-1}, once
+M0[:,j] = -ops.deriv_t_at_phi(drho, 0, 0)
+M1[:,j] = vareps*(ops.deriv_t_at_phi(irho,0,0) - ops.interp_t_at_phi(drho,0,0)) \
+          + v[:,0] / dt_vec                          # N_b^{-1}, NOT N_q^{-1}
+M2[:,j] = ops.interp_t_at_phi(irho, 0, 0)
+\end{lstlisting}
+plus, separately (\eqref{eq:R-star}'s $b$-block -- applied directly where \code{mx\_out}
+is built, outside \code{\_probe\_composite\_ops} entirely):
+\code{mx\_out = psi + dphi\_dx / dt\_vec[:,None]}. What this section adds is
+not a sign, but the reason not to hand-derive one: exactly like the rest of this module,
+the actual $\pm$ in \eqref{eq:M-weighted} should come from running this code and checking
+it against $R,R^*$'s adjoint identity numerically (\S\ref{sec:Rstar}'s closing
+``To verify''), not from further hand algebra.
+
+\subsection*{To verify -- before touching \code{projection\_nu.py} again}
+
+\begin{enumerate}
+  \item Does \eqref{eq:R-transpose}--\eqref{eq:R-star} look right?
+  \item The proposed fix above -- in particular, $N_q^{-1}$ on \code{drho}/\code{irho}
+        but a \emph{different}, $N_b^{-1}$ on $M1$'s bare \code{+v} term -- is that the
+        right split, or is there a piece still missing?
+  \item Given last time: \textbf{before any code changes}, write a numerical
+        adjoint-identity check for $R^*$ against $R$ (mirroring
+        \code{check\_At\_star\_is\_NM\_weighted\_adjoint}, \S\ref{sec:At}'s pattern) --
+        agreed this is the right gate before implementation, given the empirical
+        divergence \S\ref{sec:empirical} found last time from skipping exactly that step
+        for the projection?
+\end{enumerate}
+\end{document}

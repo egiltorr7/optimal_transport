@@ -1,0 +1,305 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+
+\geometry{margin=1.1in}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\prox}{\operatorname{prox}}
+
+\title{Malitsky--Pock's Linesearch, as a Linesearch on LADMM's Penalty}
+\author{Optimal Transport / Schr\"odinger Bridge Project\\
+Companion to \code{adaptive\_pdhg\_goldstein.tex}}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Malitsky \& Pock, \emph{A first-order primal-dual algorithm with linesearch},
+SIAM J.\ Optim.\ 28(1) 411--432, 2018 (arXiv:1608.08883), Algorithm~1, applied
+to this project's \emph{dual} saddle point -- their $f=f_1^*$, their $g=f_2^*$,
+their $K=-A^\top$ -- is \textbf{exactly \code{ladmm.py}'s own iteration}, in its
+original $(r,x,y,\delta)$ cycle, with no reordering and no lag. The reason is a
+single coincidence that the companion document had already found and read as an
+obstruction: their extrapolation coefficient $\theta_k=\tau_k/\tau_{k-1}$ is
+\emph{identical} to the ratio $\rho_k=\gamma_k/\gamma_{k-1}$ that LADMM's
+unrotated cycle produces on its own. What blocked the match with
+Goldstein--Li--Yuan's fixed $(2,-1)$ is precisely what makes this one work.
+Their $\tau_k$ \emph{is} the LADMM penalty $\gamma_k$, and their fixed ratio
+$\beta$ ties the proximal step to it by $\tau^{\rm ladmm}_k=1/(\beta\gamma_k)$.
+So the linesearch is a linesearch on $\gamma$, holding $\gamma\tau$ fixed --
+orthogonal, in $(\log\gamma,\log\tau)$, to Goldstein--Li--Yuan's rule, which
+holds $\gamma/\tau$ fixed. Part~VI reports what it actually buys: complete
+insensitivity to the initial step, and no speedup over a well-tuned one.
+\end{abstract}
+
+\section*{Part I -- their Algorithm 1, renamed to avoid this project's letters}
+Same discipline as the companion document: keep their symbol unless it already
+means something here, otherwise pick a fresh one -- and, in particular, do
+\emph{not} give their step this project's name for a step. Their $\tau_k$ is
+written $\lambda_k$ throughout Parts~I and~II, as a symbol with no meaning here
+yet. Part~III then \emph{derives} $\lambda_k=\gamma_k$; writing $\gamma$ before
+that point would assume the result the document exists to prove.
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Their symbol & What it is & Written here as\\
+\midrule
+$x^k$ (updated by $\prox_g$) & clashes with Part~I's $x$ & $v^k$\\
+$y^k$ (updated by $\prox_{f^*}$) & clashes with Part~I's $y$ & $u^k$\\
+$\tau_k$ (their step) & clashes with Part~I's $\tau$ & $\lambda_k$\\
+$\theta_k$ (extrapolation) & clashes with the companion's $\theta$ & $\rho_k$\\
+$\beta$'s partner $\sigma_k=\beta\tau_k$ & clashes with $\sigma$ & $\beta\lambda_k$\\
+$\delta$ (linesearch tolerance) & clashes with the multiplier $\delta$ & $\kappa$\\
+$\beta$ (step ratio $\sigma/\tau$) & no clash & $\beta$\\
+$\mu$ (backtracking factor) & no clash & $\mu$\\
+$K$ (operator) & $=-A^\top$ & $K$\\
+$L=\|K\|$ & no clash & $\|A\|$\\
+\bottomrule
+\end{tabular}
+\end{center}
+Their saddle point is $\min_x\max_y\ g(x)+\langle Kx,y\rangle-f^*(y)$, and
+Algorithm~1 (PDAL) reads, with $x^0,y^1$ given, $\lambda_0>0$,
+$\mu,\kappa\in(0,1)$, $\beta>0$, $\rho_0=1$:
+\begin{align}
+&\text{1.}\quad v^k=\prox_{\lambda_{k-1}g}\big(v^{k-1}-\lambda_{k-1}K^*u^k\big) \label{eq:m1}\\
+&\text{2.}\quad\text{choose }\lambda_k\in\big[\lambda_{k-1},\,\lambda_{k-1}\sqrt{1+\rho_{k-1}}\big],\text{ then linesearch:}\notag\\
+&\qquad\text{2a.}\quad \rho_k=\frac{\lambda_k}{\lambda_{k-1}},\qquad
+\bar v^k=v^k+\rho_k\big(v^k-v^{k-1}\big),\qquad
+u^{k+1}=\prox_{\beta\lambda_kf^*}\big(u^k+\beta\lambda_kK\bar v^k\big) \label{eq:m2a}\\
+&\qquad\text{2b.}\quad\text{break if }\ \sqrt{\beta}\,\lambda_k\big\|K^*u^{k+1}-K^*u^k\big\|\le\kappa\big\|u^{k+1}-u^k\big\|;
+\ \text{else }\lambda_k\!\leftarrow\!\mu\lambda_k\text{ and repeat 2a.} \label{eq:m2b}
+\end{align}
+Note $\bar v^k=(1+\rho_k)v^k-\rho_kv^{k-1}$: a \emph{step-ratio-dependent}
+extrapolation, not a fixed one. That is the whole point of what follows.
+
+\section*{Part II -- which saddle point}
+Take their $f:=f_1^*$ and their $g:=f_2^*$, so their $f^*=f_1$. Their saddle
+point becomes
+\begin{equation}
+\min_{v}\max_{u}\ f_2^*(v)+\langle Kv,u\rangle-f_1(u),\qquad K:=-A^\top,
+\label{eq:saddle}
+\end{equation}
+which is \emph{the same saddle point} the companion document's Part~II derives
+as the Fenchel dual of $\min_x f_1(x)+f_2(Ax)$ -- so both proxes are ones this
+project already computes: $\prox_{f_1}$ is the FP-feasibility projection (an
+indicator, hence step-independent) and $\prox_{tf_2^*}$ comes from
+$\prox_{f_2/t}$ by Moreau. With $K^*=-A$, \eqref{eq:m1} and \eqref{eq:m2a} read
+\begin{align}
+v^k &= \prox_{\lambda_{k-1}f_2^*}\big(v^{k-1}+\lambda_{k-1}Au^k\big) \label{eq:v}\\
+u^{k+1} &= \prox_{\beta\lambda_kf_1}\big(u^k-\beta\lambda_kA^\top\bar v^k\big) \label{eq:u}
+\end{align}
+
+\section*{Part III -- it is \code{ladmm.py}, unrotated and unlagged}
+Write \code{ladmm.py}'s own cycle (its $(r,x,y,\delta)$ order, $\alpha=1$, $d$
+folded into the affine $A$), with per-iteration $\gamma_k$ and $\tau_k$:
+\begin{align}
+D^k &= Ax^k-y^k \notag\\
+x^{k+1} &= \prox_{(1/\tau_k)f_1}\Big(x^k-\tfrac1{\tau_k}A^\top\big(\gamma_kD^k-\delta^k\big)\Big) \label{eq:lx}\\
+y^{k+1} &= \prox_{f_2/\gamma_k}\big(Ax^{k+1}-\delta^k/\gamma_k\big) \notag\\
+\delta^{k+1} &= \delta^k-\gamma_k\big(Ax^{k+1}-y^{k+1}\big) \label{eq:ld}
+\end{align}
+Set $u^k:=x^k$ and $v^k:=-\delta^k$.
+
+\paragraph{The $y/\delta$ pair is \eqref{eq:v}.} By the same Moreau step the
+companion document verifies,
+\[
+\prox_{\gamma_kf_2^*}\big(\gamma_kAx^{k+1}-\delta^k\big)
+=\gamma_k\big(Ax^{k+1}-y^{k+1}\big)-\delta^k=-\delta^{k+1},
+\]
+i.e.\ $v^{k+1}=\prox_{\gamma_kf_2^*}(v^k+\gamma_kAu^{k+1})$, which is
+\eqref{eq:v} shifted by one index -- \emph{provided} their step is this
+penalty.\quad$\checkmark$ That is the first identification:
+\[
+\boxed{\lambda_k=\gamma_k}
+\]
+i.e.\ Parts~I--II's placeholder $\lambda_k$ (their $\tau_k$) is LADMM's penalty.
+From here on $\gamma_k$ is written for both, which is now a theorem rather than
+a naming convention.
+
+\paragraph{The $x$-update's bracket is their $\bar v^k$, for free.} This is the
+step that needs no lag and no reordering. The $\delta$-update \eqref{eq:ld} at
+$k-1$ gives $\gamma_{k-1}D^k=\delta^{k-1}-\delta^k$, so
+$\gamma_kD^k=\rho_k(\delta^{k-1}-\delta^k)$ with $\rho_k=\gamma_k/\gamma_{k-1}$,
+and \eqref{eq:lx}'s bracket is
+\[
+\gamma_kD^k-\delta^k=\rho_k\delta^{k-1}-(1+\rho_k)\delta^k
+\overset{\delta=-v}{=}(1+\rho_k)v^k-\rho_kv^{k-1}=\bar v^k .
+\]
+\code{ladmm.py}'s existing gradient bracket \emph{is} Malitsky--Pock's
+extrapolated iterate, with $\rho_k$ their $\theta_k$. No auxiliary variable, no
+stored $\delta^{k-1}$, no shifted index: the extrapolation is implicit in the
+bracket the code already forms.\quad$\checkmark$ Matching the prox step in
+\eqref{eq:lx} against \eqref{eq:u} gives $1/\tau_k=\beta\gamma_k$, so
+\[
+\boxed{u^k=x^k,\quad v^k=-\delta^k,\quad K=-A^\top,\quad
+\lambda_k=\gamma_k,\quad \rho_k=\frac{\gamma_k}{\gamma_{k-1}},\quad
+\tau_k=\frac1{\beta\gamma_k}}
+\]
+
+\paragraph{Why this worked where the fixed $(2,-1)$ did not.} The companion
+document's Part~VI computes exactly the same bracket and gets
+$(1+\rho_k,-\rho_k)$, and treats it as the obstruction to matching
+Goldstein--Li--Yuan's literal $(2,-1)$ -- an obstruction that forced either a
+reordering of the cycle or a lag. Malitsky--Pock's extrapolation coefficient is
+\emph{defined} to be the step ratio, so the same $\rho_k$ that broke the other
+match is what makes this one exact. Nothing had to move.
+
+\section*{Part IV -- the linesearch, in LADMM's own quantities}
+Substituting $K^*=-A$ and $u=x$ into \eqref{eq:m2b}, and noting the affine part
+of $A$ cancels in the difference:
+\[
+\boxed{\ \sqrt{\beta}\,\gamma_k\big\|A\big(x^{k+1}-x^k\big)\big\|\ \le\ \kappa\big\|x^{k+1}-x^k\big\|\ }
+\]
+so one iteration of the scheme is: given $x^k,y^k,\delta^k,\gamma_{k-1},\rho_{k-1}$,
+\begin{enumerate}
+\item[(1)] $D^k=Ax^k-y^k$ (against the \emph{stored} $y^k$ -- unrotated).
+\item[(2)] trial $\gamma_k\in[\gamma_{k-1},\gamma_{k-1}\sqrt{1+\rho_{k-1}}]$; then repeat:
+  $\rho_k=\gamma_k/\gamma_{k-1}$, $\tau_k=1/(\beta\gamma_k)$,
+  $x^{k+1}=\prox_{(1/\tau_k)f_1}\big(x^k-\tfrac1{\tau_k}A^\top(\gamma_kD^k-\delta^k)\big)$;
+  accept if the boxed test holds, else $\gamma_k\leftarrow\mu\gamma_k$.
+\item[(3)] $y^{k+1},\delta^{k+1}$ from \eqref{eq:ld} with the \emph{same} $\gamma_k$.
+\end{enumerate}
+\paragraph{Initialization, spelled out rather than left implicit.} Their
+Algorithm~1 runs step~1 -- the $y/\delta$ update -- \emph{before} the first
+linesearch, so that the first $x$-update already has a genuine
+$(\delta^k,\delta^{k-1})$ pair to extrapolate from. A LADMM loop started
+straight from $\delta^0=0$ does not: its first bracket is
+$\gamma_0D^0-\delta^0=v^1$, short of $(1+\rho_1)v^1$ by the entire
+extrapolation factor, and every later iterate inherits the discrepancy.
+\code{ladmm\_linesearch.py} therefore primes with one $y/\delta$ update before
+the loop, and ignores the $y^0$ it is passed (it manufactures $y^1$ itself, as
+their step~1 does). Checked both ways: without priming the solver departs from a
+direct transcription of Algorithm~1 by the fourth iteration; with it, the step
+sequences $\gamma_k$ agree to \emph{exactly} zero over 40 iterations (with
+backtracking active throughout) and the final iterates to $1.4\times10^{-15}$.
+
+On \emph{this} problem the priming happens to change nothing, for the same
+structural reason \code{dz}$^0$ is machine zero: the initial guess carries
+$m=0$, so $Ax^0$ has zero momentum, the KE prox of a zero-momentum state is the
+identity, $y^1=Ax^0$ and $D^0=0$ to $9\times10^{-16}$ -- so $\delta^1=\delta^0$
+and the two initializations coincide. Every number in Part~VI is bit-identical
+before and after the fix. It would \emph{not} be a no-op for a warm start, or
+any initial guess with nonzero momentum.
+
+Two implementation notes, both from their Remark~1. First, only $\rho_k$ varies
+inside the linesearch, so $A^\top(\gamma_kD^k-\delta^k)=-(1+\rho_k)A^\top\delta^k+\rho_kA^\top\delta^{k-1}$
+is a combination of two adjoints cached once per iteration -- no $A^\top$ per
+trial. Second, and less comfortably: their Remark~1 advises choosing as the
+linesearched variable the one whose prox is \emph{cheaper}. Under the mapping
+specified here, the linesearched prox is $\prox_{f_1}$ -- the FP projection,
+this solver's expensive operation. Every rejected trial costs one projection.
+The honest work metric is therefore the projection count, not the iteration
+count, and Part~VI reports both.
+
+\section*{Part V -- how this relates to the other adaptive rules}
+Because $\beta$ is fixed, $\tau_k=1/(\beta\gamma_k)$ means
+\[
+\gamma_k\tau_k=\frac1\beta=\text{const},\qquad\text{so}\qquad
+\frac{\gamma_k}{\tau_k}=\beta\gamma_k^2\ \text{varies}.
+\]
+Set against Goldstein--Li--Yuan's Algorithm~1 rule (companion document,
+Part~V), which scales $\gamma$ and $\tau$ by the \emph{same} factor and so holds
+$\gamma/\tau$ invariant while moving $\gamma\tau$:
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+& holds fixed & moves\\
+\midrule
+Goldstein--Li--Yuan residual balancing & $\gamma/\tau$ & $\gamma\tau$\\
+Malitsky--Pock linesearch (this note) & $\gamma\tau$ & $\gamma/\tau$\\
+\bottomrule
+\end{tabular}
+\end{center}
+In $(\log\gamma,\log\tau)$ the two move along orthogonal directions, and
+together they span the whole step-size plane. That matters because the
+companion work found the remaining headroom on this problem to be in the
+\emph{ratio}: the stability bound $\tau>\gamma\|A\|^2$ is
+$\beta\gamma^2<1/\|A\|^2$ here, and the boxed linesearch test is its
+\emph{directional} version -- $\|A\,\delta x\|/\|\delta x\|$ in place of
+$\|A\|$ -- so it can accept steps the worst-case bound forbids whenever the
+increment is not aligned with $A$'s leading singular vector. It reaches, without
+a backtracking safeguard on the ratio, the direction Goldstein--Li--Yuan's rule
+structurally cannot move in.
+
+Note also what $\beta$ is: since $\gamma/\tau=\beta\gamma^2$, choosing $\beta$
+is choosing the operating ratio. The linesearch removes the need to tune
+$\gamma$, but $\beta$ takes its place as the one free parameter.
+
+\section*{Part VI -- what it actually buys}
+All runs: \code{sb\_gaussian\_nonuniform}'s Gaussian SB, clustered grid,
+ETD, $n_t=n_x=32$, $\varepsilon=10^{-4}$, 4000 iterations, against fixed-step
+LADMM at the project default. ``projections'' counts linesearch trials, since
+each repeats $\prox_{f_1}$.
+
+\paragraph{The equivalence, checked numerically.} A direct transcription of
+Algorithm~1 in their own letters and the LADMM form of Part~III, run from the
+same start with the same linesearch: iterates agree to $1.8\times10^{-15}$, and
+the step sequences $\gamma_k$ agree \emph{exactly} for the first 55 of 60
+iterations. They part only once $\|x^{k+1}-x^k\|$ reaches
+$\sim\!10^{-15}$, where the linesearch test compares two rounding-noise
+quantities -- the same benign post-convergence effect the companion document
+records for the other rules.
+
+\paragraph{Insensitivity to the initial step: yes, decisively.}
+\begin{center}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+$\gamma_0$ & \multicolumn{2}{c}{fixed-step LADMM} & \multicolumn{2}{c}{with linesearch}\\
+ & iters to $D<10^{-5}$ & mean $L^2$ & iters to $D<10^{-5}$ & $\gamma$ ends at\\
+\midrule
+$0.01$ & never & $1.95\times10^{-2}$ & 3553 & 1.284\\
+$0.1$  & never & $1.97\times10^{-2}$ & 3494 & 1.311\\
+$1$    & 3330  & $2.14\times10^{-2}$ & 3202 & 1.339\\
+$10$   & 1472  & $2.78\times10^{-1}$ & 3226 & 1.457\\
+$100$  & 981   & $8.97\times10^{-1}$ & 3226 & 1.188\\
+\bottomrule
+\end{tabular}
+\end{center}
+From $\gamma_0$ spanning four orders of magnitude the linesearch lands in the
+same place every time ($\gamma$ settling in $1.19$--$1.46$, mean $L^2$ within
+$1.5\%$ across all five). Fixed-step LADMM does not: below $\gamma_0=1$ it never
+reaches the residual threshold at this budget, and above it the residual falls
+\emph{faster} while the answer gets steadily worse -- $\gamma_0=100$ reaches
+$D<10^{-5}$ in 981 iterations with a mean $L^2$ error of $0.90$ against the
+reference's $0.02$. That is the familiar warning that a small residual is not a
+correct answer, in its sharpest form so far.
+
+\paragraph{Faster convergence: no, not on this problem.} Against a
+\emph{well-tuned} fixed step the linesearch does not win:
+\begin{center}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+ & iters & projs & iters to $D<10^{-5}$ & projs to $D<10^{-5}$\\
+\midrule
+LADMM, $\gamma=1,\tau=1.01$              & 4000 & 4000 & 3330 & 3330\\
+linesearch, $\beta=1$, growth $=1$       & 4000 & 7905 & 3648 & 7209\\
+linesearch, $\beta=1$, growth $=0.2$     & 4000 & 4896 & 3698 & 4526\\
+linesearch, $\beta=0.5$, growth $=0.2$   & 4000 & 4895 & 3326 & 4070\\
+\bottomrule
+\end{tabular}
+\end{center}
+At best it matches the tuned run's iteration count (3326 vs 3330) while spending
+$22\%$ more projections. The ``growth'' column is the position in their step-2
+interval: at the largest trial ($=1$, their first option) the step always
+over-reaches once $\gamma$ has settled and almost every iteration wastes a
+rejected trial -- $1.98$ trials/iteration measured -- which their Step~2
+explicitly lets us dial back, to $1.22$ at growth $=0.2$.
+
+\paragraph{Verdict.} The linesearch buys robustness, not speed: it removes
+$\gamma$ from the list of things that must be tuned, and it is the only
+mechanism examined in this project that moves $\gamma/\tau$ at all. It does not
+accelerate a run whose $\gamma$ was already well chosen, and it costs one FP
+projection per rejected trial. Whether it pays therefore depends on whether a
+good $\gamma$ is known in advance -- which, for the grid/$\varepsilon$/scheme
+sweeps this project runs, it often is not.
+
+\paragraph{Not claimed.} Only $\varepsilon=10^{-4}$, one grid, one scheme, one
+resolution, and a fixed 4000-iteration budget were tested; $\beta$ was swept
+only over $\{0.25,\dots,8\}$. The accelerated variants (their Algorithms 2 and
+3, for strongly convex $g$ or $f^*$) are not implemented, and neither is their
+Algorithm~4.
+\end{document}

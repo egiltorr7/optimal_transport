@@ -1,0 +1,918 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\geometry{margin=1.1in}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}{Proposition}
+\newtheorem{lemma}{Lemma}
+\newtheorem{remark}{Remark}
+\newtheorem{corollary}{Corollary}
+
+\newcommand{\eps}{\varepsilon}
+\newcommand{\dt}{\Delta t}
+\newcommand{\dx}{\Delta x}
+\newcommand{\RR}{\mathbb{R}}
+\newcommand{\Ch}{\mathcal{C}^\eps_h}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\lx}{\lambda_x^k}
+
+\title{Linearized ADMM for the Schr\"odinger Bridge\\
+       on a Dyadically Graded Non-Uniform Time Grid}
+\author{Companion note to \emph{Computational Methods for the Schr\"odinger Bridge Problem}}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This note extends the fully-discrete (Crank--Nicolson-style) Fokker--Planck projection of the
+main paper's Appendix~A from a uniform time step $\dt$ to an arbitrary, in particular
+\emph{dyadically graded}, non-uniform time partition $\{\dt_j\}_{j=1}^{n_t}$. We show that the
+entire LADMM recursion (Eq.~(35) of the main paper) is unchanged in form -- only the definition
+of the temporal derivative operator $D_t$ changes -- and that the per-spatial-mode reduction of
+the projection step still factors as a sum of a Gram matrix and a nonnegative diagonal term,
+so the symmetric positive-definiteness result of Lemma~A.2 survives \emph{verbatim}, with an
+identical proof, for \emph{any} admissible $\{\dt_j\}$. What does not survive is the closed-form
+diagonalization used for the singular DC (spatial $k{=}1$) mode: on a non-uniform grid the
+discrete time-Laplacian $K_t$ is no longer a constant-coefficient (Toeplitz) operator and is no
+longer diagonalized by the fixed DCT-II basis $T_t$, forcing that one mode's solve from an
+$O(n_t\log n_t)$ spectral divide down to an $O(n_t^2)$ dense pseudo-inverse application --
+identified here as the single place efficiency is lost in exchange for the grid's local
+accuracy gain. Section~\ref{sec:etd} carries the same generalization through for the main
+paper's ETD scheme (fully closed-form, no probing needed there either, sharing the same DC-mode
+fallback), though a head-to-head test did not clearly reproduce the stability advantage over CN
+that motivated doing so. Section~\ref{sec:cheb-grid} shows the same generalization covers a
+second, structurally different family -- a Chebyshev-Gauss-Lobatto-clustered grid -- with no
+new derivation needed, and Section~\ref{sec:quadrature} answers a natural follow-up: whether
+Clenshaw--Curtis quadrature weights should replace the local cell width in the $L^2$ norms once
+the grid clusters at Chebyshev points (no -- the field is piecewise-constant per cell, not a
+global polynomial sampled at the nodes, so the composite-midpoint weighting already in use is
+the consistent choice regardless of clustering pattern). Section~\ref{sec:ke-prox} derives the
+complementary fact for the KE prox itself: unlike the constraint-side operators of
+Sections~\ref{sec:operators}--\ref{sec:etd}, the KE prox's quadratic penalty was never
+$\dt\dx$-weighted even on the uniform grid (a harmless omission there, since a single shared
+constant factor never changes an argmin) -- so generalizing it correctly means rescaling the
+\emph{objective} term by each cell's width relative to the reference grid, $\dt_n/\dt_\mathrm{ref}$,
+not reusing the diagnostic norms' $\dt_n\dx$ weighting. All formulas below were checked against
+the reference implementation to machine precision (Sections~\ref{sec:etd} and
+~\ref{sec:gained-lost}, footnoted).
+\end{abstract}
+
+%==============================================================================
+\section{Setup and notation (recap)}
+%==============================================================================
+
+We reuse the main paper's notation throughout. $\Omega=[0,1]$, $T=1$, $n_x$ spatial cells,
+$\dx = 1/n_x$. The density/momentum pair $(\rho,m)$ is collocated at cell centers; the
+staggered pair $(\tilde\rho, b)$ carries the hard constraint, with $\tilde\rho$ staggered in
+\emph{time} (fixed endpoint data $\mu,\nu$) and $b$ staggered in \emph{space} (homogeneous
+Neumann/no-flux). $D_x, A_x$ (space derivative/average, $n_x\times(n_x{-}1)$) and $K_x = D_xD_x^\top$
+are exactly as in the main paper and are untouched by everything below -- only the time grid is
+made non-uniform, space stays uniform throughout.
+
+On a \emph{uniform} time grid ($n_t$ cells, $\dt=1/n_t$), the main paper's Appendix~A discretizes
+the Fokker--Planck constraint as
+\begin{equation}
+  \label{eq:uniform-set}
+  \Ch = \bigl\{(\tilde\rho,b) : [D_t\otimes I_{n_x} - \eps(A_t\otimes K_x)]\,\tilde\rho +
+        (I_{n_t}\otimes D_x)\,b = d \bigr\},
+\end{equation}
+and projects onto it via $\mathrm{Proj}_{\Ch}(\tilde\rho,b) = (\tilde\rho,b) - \mathcal{L}_\eps^\top
+(\mathcal{L}_\eps\mathcal{L}_\eps^\top)^+\bigl(\mathcal{L}_\eps(\tilde\rho,b)-\tfrac1\dt(e_1{\otimes}\mu-e_{n_t}{\otimes}\nu)\bigr)$,
+which after a spatial DCT reduces (Eq.~(38)--(39)) to $n_x$ independent $n_t\times n_t$
+tridiagonal solves $M^k w^k = \hat r^k$, one per spatial DCT mode $k=1,\dots,n_x$, with $M^1=K_t$
+singular (handled by a second, temporal, DCT) and $M^k$ ($k>1$) SPD (Lemma~A.2), inverted by an
+unpivoted Thomas sweep. This whole apparatus -- $D_t$, $A_t$, $M^k$, the Thomas solve -- is what
+this note generalizes.
+
+%==============================================================================
+\section{The dyadically graded time grid}
+\label{sec:dyadic-grid}
+%==============================================================================
+
+Fix a base resolution $\bar n_t$ and a grading depth $n_b\ge 1$ with $2n_b\le\bar n_t$. Base cell
+$i$ counted from either boundary ($i=1$ touches $t=0$ or $t=1$; $i=n_b$ is the last graded cell,
+bordering the untouched interior) is split into $2^{\,n_b-i+1}$ equal sub-cells. Writing
+$h=1/\bar n_t$ for the base width, this gives the non-uniform partition
+\begin{equation}
+  \dt_j =
+  \begin{cases}
+    h/2^{\,n_b-i+1}, & \text{cell $j$ is the $i$-th graded cell from the nearer boundary,
+                              $i=1,\dots,n_b$}, \\
+    h, & \text{cell $j$ is in the untouched interior.}
+  \end{cases}
+\end{equation}
+The total cell count is $n_t = \bar n_t + 2\bigl(2^{n_b+1}-2-n_b\bigr)$ (geometric sum on each
+end). $n_b=1$ reproduces the single-cell-split grid exactly (h/2, h/2 at each end); larger $n_b$
+grades $h/2, h/4, \dots, h/2^{n_b}$ inward from the boundary, each cell exactly half the width of
+its neighbor \emph{one step further from the boundary} -- including the seam with the untouched
+interior, which plays the role of an implicit, unrefined $(n_b{+}1)$-th member of the chain, so
+no special-casing is needed there. (Implementation: \code{graded\_ends\_time\_grid} in
+\code{time\_grid.py}; \code{n\_boundary=1} is checked to reduce to the single-cell split exactly,
+see \code{validate\_nu.py}.)
+
+Let $t_0=0<t_1<\cdots<t_{n_t}=1$ be the resulting edges and $\tau_j=\tfrac12(t_{j-1}+t_j)$ the
+cell centers, $j=1,\dots,n_t$ (1-indexed, matching the main paper's convention; this is a shift
+from the 0-indexed \code{t\_edges}/\code{t\_centers} used in the codebase). $\tilde\rho$ still
+lives at the $n_t-1$ interior edges $t_1,\dots,t_{n_t-1}$ (plus fixed $\mu,\nu$ at $t_0,t_{n_t}$);
+$(\rho,m,b)$ still live at the $n_t$ cell centers $\tau_j$ -- the grid convention of
+Section~1 is untouched, only the \emph{spacing} changes.
+
+%==============================================================================
+\section{The Chebyshev-clustered time grid}
+\label{sec:cheb-grid}
+%==============================================================================
+
+A second, structurally different way to concentrate resolution near the boundaries: instead of
+grading a fixed number of cells geometrically (Section~\ref{sec:dyadic-grid}), smoothly reshape
+\emph{every} cell of the uniform reference grid by a fixed map. Let $\xi_j=j/n_t$, $j=0,\dots,n_t$,
+be the uniform reference partition and
+\begin{equation}
+  \label{eq:cheb-map}
+  c(\xi) = \tfrac12\bigl(1-\cos(\pi\xi)\bigr),
+\end{equation}
+the same map underlying Chebyshev--Gauss--Lobatto (CGL) nodes: on $[-1,1]$ the $n_t{+}1$ CGL
+nodes are $\cos(\pi j/n_t)$, and $c$ is exactly that same node set, affinely rescaled onto
+$[0,1]$ with the endpoint order reversed ($c(0)=0$, $c(1)=1$). A strength $s\in[0,1]$ blends the
+identity and the full map,
+\begin{equation}
+  t_j = (1-s)\,\xi_j + s\,c(\xi_j), \qquad t_0:=0,\ t_{n_t}:=1\ \text{pinned exactly},
+\end{equation}
+so $s=0$ reproduces the uniform grid exactly and $s=1$ places every edge at a CGL node.
+(Implementation: \code{clustered\_time\_grid} in \code{time\_grid.py}.)
+
+\subsection*{Cell widths: quadratic clustering, not geometric}
+
+Unlike Section~\ref{sec:dyadic-grid}'s dyadic grading -- a fixed number of cells, each exactly
+half its neighbor, with the untouched interior held at a single fixed width $h$ -- $c$ reshapes
+every cell continuously, by an amount that varies smoothly with position; there is no untouched,
+exactly-uniform interior here. Since $c'(\xi)=\tfrac{\pi}{2}\sin(\pi\xi)$ vanishes at both
+endpoints, cell widths near the boundary shrink \emph{quadratically} in $n_t$, not geometrically:
+at $s=1$,
+\begin{equation}
+  \dt_j = c(\xi_j)-c(\xi_{j-1}) \approx c'(\xi_{j-1})/n_t = \tfrac{\pi}{2n_t}\sin(\pi\xi_{j-1})
+  \;\xrightarrow{\ j\to0\ }\; \tfrac{\pi^2}{2n_t^2}\,j,
+\end{equation}
+using $\sin(\pi\xi)\approx\pi\xi$ for small $\xi$ -- the classical $O(n_t^{-2})$ endpoint spacing
+of Chebyshev nodes, versus $O(n_t^{-1})$ everywhere on the uniform grid and the fixed, geometric
+floor $h/2^{n_b}$ of the dyadic grid (Section~\ref{sec:dyadic-grid}). Mid-domain
+($\xi\approx\tfrac12$), $\dt_j\approx\pi/(2n_t)$, the same order as the uniform grid.
+
+\begin{center}
+\begin{tabular}{c|ccccccccc}
+\toprule
+$j$ (edge) & 0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 \\
+\midrule
+$t_j$ & $0$ & $0.0381$ & $0.1464$ & $0.3087$ & $0.5$ & $0.6913$ & $0.8536$ & $0.9619$ & $1$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+\begin{center}
+\begin{tabular}{c|cccccccc}
+\toprule
+$i$ (cell) & 0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 \\
+\midrule
+$\dt_i$ & $0.0381$ & $0.1084$ & $0.1622$ & $0.1913$ & $0.1913$ & $0.1622$ & $0.1084$ & $0.0381$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+\emph{Worked example, $n_t=8$, $s=1$} (\code{clustered\_time\_grid(8,\allowbreak\ strength=1.0)},
+matches to $10^{-6}$). Note $\sum_i\dt_i=1$ and the symmetric, strictly-graded-toward-both-ends
+profile -- every cell distinct, unlike the flat interior plateau of Section~\ref{sec:dyadic-grid}'s
+worked example.
+
+Nothing in Sections~\ref{sec:operators}--\ref{sec:etd} is specific to \emph{how} $\{\dt_j\}$ was
+generated: $D_t(\dt)$
+(Eq.~\eqref{eq:Dt-nonuniform}), the Gram-matrix decomposition (Proposition~\ref{prop:gram}), the
+SPD bound (Theorem~\ref{thm:spd}), the singular-mode analysis (Proposition~\ref{prop:kernel}),
+and the ETD generalization (Section~\ref{sec:etd}) were all proved for \emph{any} admissible
+partition -- so this Chebyshev-clustered grid needs no new derivation, only a numeric check that
+it actually satisfies the hypotheses those proofs assumed (positive, well-ordered $\dt_j$).
+\code{validate\_nu.py}'s adjoint-identity and repeated-projection-stability checks already
+include a \code{clustered} case; a fresh end-to-end run
+(\code{clustered\_time\_grid(64,\allowbreak\ strength=0.8)}, $\eps=10^{-3}$, CN scheme) converges
+and matches the analytical SB solution to mean $L^2$ error $1.0\times10^{-2}$, no special-casing
+required anywhere.
+
+%==============================================================================
+\section{Quadrature: composite midpoint vs.\ Clenshaw--Curtis}
+\label{sec:quadrature}
+%==============================================================================
+
+Since Section~\ref{sec:cheb-grid}'s edges cluster at Chebyshev(-Gauss-Lobatto) points, a natural
+question is whether integrals over time -- the $L^2$ norms driving the LADMM stopping criteria,
+or the kinetic-energy functional $J_h$ itself -- should use Clenshaw--Curtis (CC) quadrature
+weights, the weights classically paired with Chebyshev nodes to achieve near-spectral accuracy,
+in place of the local cell width $\dt_j$ already used throughout.
+
+\textbf{No.} CC weights are derived by integrating the unique global polynomial (equivalently,
+truncated Chebyshev series) that interpolates function values \emph{at} the Chebyshev nodes --
+the correct quadrature only when that is how the integrand is represented. Ours is not:
+$(\rho,m,b)$ are a piecewise-constant-per-cell (finite-volume) field, exactly as on the uniform
+or dyadically graded grid, living at the cell \emph{centers} $\tau_j$ -- the midpoints between
+consecutive edges, a set distinct from the edges $t_j$ themselves (where the CGL nodes actually
+sit). CC quadrature has no direct meaning for a field sampled at this dual, staggered point set.
+
+The quadrature consistent with a piecewise-constant field is the one already implemented,
+grid-generically, in \code{pipeline\_nu.py}'s \code{\_weighted\_sq\_sum}:
+\begin{equation}
+  \int_0^1 f(t)^2\,dt \;\approx\; \sum_j f(\tau_j)^2\,\dt_j
+\end{equation}
+(composite midpoint rule -- with the center-to-center dual width $\dt_j^{\mathrm{dual}} =
+\tfrac12(\dt_j+\dt_{j+1})$ used instead for the staggered $\tilde\rho$, which lives at edges
+rather than centers). This is $O(\dt_j^2)$ locally accurate for \emph{any} smoothly-varying
+partition -- uniform, dyadically graded, or Chebyshev-clustered alike -- so nothing
+grid-specific was needed: the same formula already covers this section's grid unchanged.
+
+\begin{remark}[Why upgrading the quadrature alone would not help]
+Even a genuine CC-style upgrade would not raise the overall solution accuracy: the scheme's
+error is bottlenecked by the $O(\dt^2)$-ish local truncation error of $D_t(\dt)$
+(Section~\ref{sec:entries}), a low-order finite-difference stencil, not by the quadrature used to
+measure norms after the fact. Matching a high-order quadrature to a low-order discretization
+buys nothing -- the weaker of the two still dominates the error. A genuinely higher-order scheme
+would require replacing $D_t$ itself with a Chebyshev differentiation matrix (dense, global,
+collocated directly at the CGL nodes) -- a structurally different method giving up the staggered
+grid and the DCT-diagonalization / local Thomas-solve architecture this whole note relies on. A
+legitimate but separate undertaking, not attempted here.
+\end{remark}
+
+\begin{remark}[A related, smaller issue -- diagnostics, not the solver]
+The comparison script's printed summary statistics (\code{err\_cc.mean()}, \code{.max()}) are a
+plain, \emph{unweighted} \code{numpy} mean/max over the $n_t$ rows, not $\dt_j$-weighted. On a
+strongly clustered grid, with far more rows packed near the boundary, this over-represents the
+boundary region relative to a genuine time-averaged error. Unlike the norms above (used inside
+the LADMM iteration itself, already correctly weighted), this is only a diagnostic print in
+\code{scripts/sb\_gaussian\_refine\_ends\_vs\_uniform.py} and does not affect the solve --
+flagged here for completeness, not fixed.
+\end{remark}
+
+%==============================================================================
+\section{Generalized operators}
+\label{sec:operators}
+%==============================================================================
+
+\subsection{The time derivative $D_t(\dt)$}
+\label{sec:Dt}
+
+$D_t$ becomes row-dependent: writing $\dt_j = t_j - t_{j-1}$,
+\begin{equation}
+  \label{eq:Dt-nonuniform}
+  D_t(\dt) = \begin{pmatrix}
+    1/\dt_1 & & & \\
+    -1/\dt_2 & 1/\dt_2 & & \\
+    & \ddots & \ddots & \\
+    & & -1/\dt_{n_t-1} & 1/\dt_{n_t-1} \\
+    & & & -1/\dt_{n_t}
+  \end{pmatrix} \in \RR^{n_t\times(n_t-1)},
+\end{equation}
+i.e.\ row $j$ (mapping the two edges bounding cell $j$ to that cell's centered difference) uses
+\emph{only} $\dt_j$ -- this is a per-row rescaling of the uniform-grid $D_t$, nothing more, since
+each row only ever touches its own cell's two bounding edges. Reduces to the main paper's $D_t$
+exactly when every $\dt_j=\dt$.
+
+\subsection{The time average $A_t$ is unchanged}
+
+\begin{lemma}[Midpoint averaging is grid-independent]
+\label{lem:At}
+$A_t$ -- the plain $\tfrac12,\tfrac12$ averaging matrix of Eq.~(15) -- needs \emph{no}
+modification on a non-uniform grid: it remains the exact linear interpolant of the two bounding
+edge values at the cell center, for \emph{any} $\dt_j$.
+\end{lemma}
+\begin{proof}
+Let $L(t) = v_{j-1} + (v_j-v_{j-1})\frac{t-t_{j-1}}{\dt_j}$ be the affine interpolant of the two
+edge values bounding cell $j$. At the cell center $\tau_j = t_{j-1}+\dt_j/2$,
+$L(\tau_j) = v_{j-1} + \tfrac12(v_j-v_{j-1}) = \tfrac12(v_{j-1}+v_j)$, independent of $\dt_j$.
+\end{proof}
+
+Consequently $A_t$, $K_x$, $D_x$, $A_x$ are all completely unaffected by grading the time grid;
+\emph{only} $D_t$ changes.
+
+\subsection{The discrete constraint set}
+
+Substituting $D_t(\dt)$ for $D_t$ in \eqref{eq:uniform-set} gives the graded-grid analogue
+\begin{equation}
+\begin{split}
+  \Ch(\dt) &= \bigl\{(\tilde\rho,b) : [D_t(\dt)\otimes I_{n_x} - \eps(A_t\otimes K_x)]\,\tilde\rho +
+        (I_{n_t}\otimes D_x)\,b = d \bigr\}, \\
+  d &= \tfrac1{\dt_\bullet}(e_1\otimes\mu - e_{n_t}\otimes\nu) \big|_{\text{row-scaled}},
+\end{split}
+\end{equation}
+where the boundary rows of $d$ inherit their own $\dt_1$ / $\dt_{n_t}$ scaling from $D_t(\dt)$'s
+first/last row (the interior of $d$ is zero, exactly as before). \code{Remark A.1}'s solvability
+condition ($\sum_i\mu_{i+1/2}=\sum_i\nu_{i+1/2}$) is unchanged: it only used $1_{n_x}^\top K_x=0$,
+a purely spatial fact.
+
+\begin{proposition}[LADMM is grid-agnostic]
+The LADMM recursion \emph{(35a)--(35c)} of the main paper is unchanged in form on the graded
+grid: only the definition of $\mathcal{L}_\eps$ (through $D_t(\dt)$) changes. $\mathrm{Prox}_{J_h}$
+(Proposition~3.2) is entirely pointwise in $(\rho,m)$ and never references $D_t$, so it is
+untouched; the consensus map $\mathcal{A}$ interpolates $\tilde\rho$ only in time and $b$ only in
+space (Eq.~(16)), and by Lemma~\ref{lem:At} its time half ($A_t$) also needs no change.
+\end{proposition}
+
+%==============================================================================
+\section{The projection step}
+%==============================================================================
+
+Write $D_t := D_t(\dt)$ for brevity. Following the same DCT-in-space block-diagonalization as
+the main paper (space is still uniform, so this step is verbatim unchanged), the projection
+reduces to $n_x$ independent $n_t\times n_t$ systems $M^k w^k = \hat r^k$, $k=1,\dots,n_x$, one
+per spatial DCT mode with eigenvalue $\lx$.
+
+\begin{proposition}[Gram-matrix decomposition, any grid]
+\label{prop:gram}
+\begin{equation}
+  \label{eq:Mk-decomp}
+  M^k = M_0 + \lx M_1 + \eps^2(\lx)^2 M_2, \qquad
+  M_0 = D_tD_t^\top,\quad M_1 = \eps(D_tA_t^\top+A_tD_t^\top)+I_{n_t},\quad M_2=A_tA_t^\top,
+\end{equation}
+and equivalently
+\begin{equation}
+  \label{eq:Mk-factored}
+  M^k = \bigl(D_t + \eps\lx A_t\bigr)\bigl(D_t+\eps\lx A_t\bigr)^\top + \lx I_{n_t}.
+\end{equation}
+\end{proposition}
+\begin{proof}
+Expand \eqref{eq:Mk-factored}: $(D_t+\eps\lx A_t)(D_t+\eps\lx A_t)^\top = D_tD_t^\top +
+\eps\lx(D_tA_t^\top+A_tD_t^\top) + \eps^2(\lx)^2A_tA_t^\top$. Adding $\lx I_{n_t}$ and regrouping
+by powers of $\lx$ gives exactly \eqref{eq:Mk-decomp}. Neither step used any structural property
+of $D_t$ (Toeplitz-ness, constant coefficients) -- it is pure algebra, valid for the matrix
+\eqref{eq:Dt-nonuniform} exactly as it is for the uniform-grid $D_t$.\footnote{Numerically
+checked against the codebase's own construction of $M_0,M_1,M_2$ (built by probing
+\code{deriv\_t\_at\_rho}/\code{interp\_t\_at\_rho} with unit vectors, \code{projection\_nu.py}) on
+a genuinely graded grid: all three matrices, and the factored identity \eqref{eq:Mk-factored},
+match to $10^{-8}$--$10^{-10}$.}
+\end{proof}
+
+This is \emph{identical in shape} to the main paper's Eq.~(39) -- the closed-form entries
+$\alpha^j,\beta^j$ are gone (replaced by row-dependent $1/\dt_j,1/\dt_{j+1}$ terms, see
+Section~\ref{sec:entries}), but the algebraic structure $M^k = (\text{Gram}) + \lx I$ survives
+completely.
+
+\begin{theorem}[SPD survives verbatim]
+\label{thm:spd}
+For every $k$ with $\lx>0$, $M^k$ is symmetric positive definite with $\lambda_{\min}(M^k)\ge\lx$
+-- the exact bound of Lemma~A.2, unconditional in $\{\dt_j\}$.
+\end{theorem}
+\begin{proof}
+Symmetry is immediate from \eqref{eq:Mk-factored} (a Gram matrix plus a multiple of the
+identity). For any unit $v$, $\langle v, M^kv\rangle = \|(D_t+\eps\lx A_t)^\top v\|^2 + \lx\|v\|^2
+\ge \lx$, using only that $(D_t+\eps\lx A_t)(\cdot)^\top$ is a Gram matrix (hence PSD) --
+verbatim the main paper's Lemma~A.2 proof, which likewise never used the Toeplitz structure of
+$D_t$.
+\end{proof}
+
+Because $M^k$ is SPD, the unpivoted Thomas sweep used for $k>1$ is backward stable for the same
+classical reason it is on the uniform grid (symmetric Gaussian elimination on an SPD tridiagonal
+matrix is unconditionally stable, independent of the M-matrix argument the main paper also
+invokes) -- \emph{this generalizes for free}. The generalized Thomas sweep itself
+(\code{thomas\_batch\_precomp\_general} / \code{thomas\_batch\_solve\_general} in
+\code{projection\_nu.py}) only needs a row-varying off-diagonal, which is exactly what
+\eqref{eq:Mk-decomp}'s $M_0,M_1$ produce; it is still $O(n_t)$ work, vectorized across all
+$n_x{-}1$ non-DC modes simultaneously via array broadcasting -- \emph{identical} asymptotic cost
+to the uniform-grid batched solve.
+
+\subsection{Row entries of $M_0,M_1$}
+\label{sec:entries}
+
+Unlike the uniform grid, $M_0=D_tD_t^\top$ is not Toeplitz: its interior rows have
+$(M_0)_{jj} = 1/\dt_j^2+1/\dt_{j+1}^2$, $(M_0)_{j,j+1}=(M_0)_{j+1,j}=-1/\dt_{j+1}^2$, with the
+familiar boundary rows adjusted for the missing neighbor. Concretely, the adjoint entering $M_0$
+(and, via \eqref{eq:Mk-decomp}, every $M^k$) is
+\begin{equation}
+  (D_t^\top v)_j = \frac{v_{j+1}}{\dt_{j+1}} - \frac{v_j}{\dt_j},
+\end{equation}
+so at a fine/coarse junction (e.g.\ $\dt_j=h/2,\ \dt_{j+1}=h$) the two terms are asymmetrically
+weighted by a factor of $2$ -- each term rescaled by its \emph{own} cell's width, not by any
+shared center-to-center distance (see \code{docs/nonuniform\_grid\_refine\_ends.tex} for a fully
+worked $\bar n_t=6$ numeric instance of this row).
+
+%==============================================================================
+\section{The singular DC mode}
+\label{sec:dc-mode}
+%==============================================================================
+
+$M^1$ (the $k{=}1$, $\lx=0$ mode) equals $M_0=D_tD_t^\top$, which is rank-deficient by
+construction: $D_t\in\RR^{n_t\times(n_t-1)}$, so $D_t^\top\in\RR^{(n_t-1)\times n_t}$ has rank at
+most $n_t-1<n_t$, hence $M_0=D_tD_t^\top$ is always singular -- a shape argument, true on any
+grid.
+
+\begin{proposition}[The null direction is $\dt$ itself, not $1_{n_t}$]
+\label{prop:kernel}
+$\ker M_0 = \ker D_t^\top = \mathrm{span}\{\dt\}$, where $\dt=(\dt_1,\dots,\dt_{n_t})^\top$ is
+the vector of cell widths -- \emph{not} $\mathrm{span}\{1_{n_t}\}$ unless the grid is uniform.
+\end{proposition}
+\begin{proof}
+$D_t^\top v=0$ means $v_{j+1}/\dt_{j+1}=v_j/\dt_j$ for every $j$, i.e.\ $v_j/\dt_j$ is constant
+in $j$, i.e.\ $v_j = C\dt_j$. On a uniform grid $\dt_j\equiv\dt$, so this reduces to
+$v=\mathrm{const}$, recovering the main paper's fact that $K_t1_{n_t}=0$.\footnote{Verified
+numerically: on a genuinely graded grid, $\|M_0\,\dt\|/\|\dt\|\sim 10^{-13}$ while
+$\|M_0\,1_{n_t}\|/\|1_{n_t}\|=O(10^3)$ -- the constant vector is emphatically \emph{not} in the
+kernel once the grid is non-uniform.}
+\end{proof}
+
+\begin{remark}[A gauge mismatch with the continuum]
+\label{rem:gauge}
+In the continuous problem the null direction of the (unregularized) time-Laplacian on $\phi$ is
+the constant function $\phi\equiv c$ (adding a constant to the dual potential is the SB
+problem's genuine gauge freedom). Proposition~\ref{prop:kernel} shows the \emph{discrete} null
+direction drifts away from $1_{n_t}$ toward $\dt$ once the grid is graded. This is a symptom of
+using the \emph{Euclidean} (array-index) adjoint for $D_t^\top$ rather than a
+$\dt$-weighted-$L^2$ adjoint that would keep the continuum's constant-function gauge direction
+exactly. The weighted adjoint is the more "physically natural" choice, but (verified empirically
+in this codebase -- see \code{operators\_nu.py}'s docstring) it is \emph{not} the correct adjoint
+for the LADMM projection identity to hold: substituting it silently breaks the algebra behind
+\eqref{eq:Mk-factored} and the projection stops being idempotent under repeated application. So
+there is a genuine, currently unresolved tension between "discrete gauge direction matches the
+continuum" and "the projection is a provably well-posed orthogonal projection" -- this note does
+not resolve it, only documents it as an open point.
+\end{remark}
+
+\subsection{Loss of closed-form diagonalization}
+
+On the uniform grid, $K_t=D_tD_t^\top$ is exactly the constant-coefficient discrete Neumann
+Laplacian, simultaneously diagonalized by the fixed orthogonal DCT-II matrix $T_t$ (this is why
+Algorithm~2, line~3, can solve the $k{=}1$ mode in $O(n_t\log n_t)$: one forward DCT, one
+division by the $n_t$ known eigenvalues $\lambda_t^i$, one inverse DCT). Once $\dt_j$ varies,
+$K_t(\dt)=D_t(\dt)D_t(\dt)^\top$ is \emph{not} a constant-coefficient operator and, in general,
+is not simultaneously diagonalized by \emph{any} fixed fast-transform basis -- $T_t$ in
+particular no longer diagonalizes it (it only diagonalizes the specific Toeplitz structure the
+uniform grid produces). The reference implementation falls back to a dense pseudo-inverse,
+\code{M0\_pinv = np.linalg.pinv(M0)}, computed once at precompute time and applied as a dense
+$n_t\times n_t$ matrix--vector product at \emph{every} LADMM iteration
+(\code{projection\_nu.py}: \code{phi\_hat[:, 0] = bp.M0\_pinv @ f\_hat[:, 0]}). This is exactly,
+and only, where efficiency is lost -- quantified in Section~\ref{sec:gained-lost}.
+
+%==============================================================================
+\section{Algorithm}
+%==============================================================================
+
+\begin{algorithm}[h]
+\caption{Precompute for $\mathrm{Proj}_{\Ch(\dt)}$, graded grid}
+\begin{algorithmic}[1]
+\Require $\{\dt_j\}_{j=1}^{n_t}$, $\eps$
+\State Probe $D_t(\dt)$, $A_t$ against $n_t{-}1$ unit vectors each to assemble $M_0,M_1,M_2$
+  \Comment{$O(n_t^2)$ -- was $O(n_t)$ closed-form, Eq.~(39)}
+\State Extract tridiagonal entries of $M_0,M_1,M_2$; form $\{\lx\}_{k=2}^{n_x}$-batched
+  diagonal/off-diagonal via \eqref{eq:Mk-decomp}
+  \Comment{$O(n_t\, n_x)$, unchanged}
+\State Thomas forward sweep (batched over $k=2,\dots,n_x$)
+  \Comment{$O(n_t\, n_x)$, unchanged}
+\State $M_0^+ \leftarrow$ dense pseudo-inverse of $M_0$
+  \Comment{$O(n_t^3)$ -- was $O(n_t)$ (eigenvalues only), Algorithm~2 line~3}
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[h]
+\caption{$\mathrm{Proj}_{\Ch(\dt)}(\tilde\rho,b)$, per LADMM iteration}
+\begin{algorithmic}[1]
+\Require $(\tilde\rho,b)$, precomputed $M_0^+$, Thomas factors
+\State $r \leftarrow \mathcal{L}_\eps(\tilde\rho,b) - d$; spatial DCT of $r$
+  \Comment{$O(n_t\,n_x\log n_x)$, unchanged}
+\State $k=1$: $\hat w^1 \leftarrow M_0^+\, \hat r^1$
+  \Comment{\textbf{$O(n_t^2)$ -- was $O(n_t\log n_t)$}, Algorithm~2 line~3}
+\State $k=2,\dots,n_x$: batched Thomas back-substitution
+  \Comment{$O(n_t\, n_x)$, unchanged}
+\State Inverse spatial DCT; apply $\mathcal{L}_\eps^\top$
+  \Comment{$O(n_t\,n_x\log n_x)$, unchanged}
+\end{algorithmic}
+\end{algorithm}
+
+%==============================================================================
+\section{Generalizing the ETD scheme}
+\label{sec:etd}
+%==============================================================================
+
+Section~3.2 of the main paper's ETD scheme integrates the diffusion term exactly per DCT-$x$
+mode: for mode $k$ with rate $\alpha_j = \eps\lx\dt$, $c_j=e^{-\alpha_j}$,
+$\varphi_j=(1-c_j)/\alpha_j$, the constraint becomes the exact-semigroup recursion
+$(\hat q_h^{j+1} - c_j\hat q_h^j)/\dt + \varphi_j(\widehat{D_xb_h})^j = 0$ (Eq.~(26)). Unlike the
+CN scheme's $D_t$ (Section~\ref{sec:operators}), this recursion's coefficients $c_j,\varphi_j$ themselves depend on
+$\dt$ through the exponential -- so generalizing to $\{\dt_n\}$ means letting \emph{every cell}
+integrate the exact semigroup over \emph{its own} width, exactly the same "cell-local" principle
+behind $D_t(\dt)$ (Section~\ref{sec:Dt}):
+\begin{equation}
+  \label{eq:etd-coeffs}
+  c_n(\lx) = e^{-\eps\lx\dt_n}, \qquad
+  \varphi_n(\lx) = \frac{1-c_n(\lx)}{\eps\lx\dt_n} \ \ (\to 1 \text{ as } \eps\lx\dt_n\to0),
+\end{equation}
+promoting the uniform grid's per-mode scalars to $(n_t\times n_x)$ arrays, one value per
+(cell, spatial mode) pair -- cheap, $O(n_tn_x)$, an outer product $\eps\dt\otimes\lambda_x$
+through \texttt{exp}. The residual for cell $n$ is the bidiagonal recursion
+$R^k(w)[n] = (w[n{+}1]-c_n(\lx)w[n])/\dt_n$, and (unlike the CN case) \emph{every} downstream
+formula stays closed-form -- no numerical probing is needed anywhere in this generalization,
+because $R^k$ is already an explicit two-term recursion, not a composition of several operators:
+\begin{align}
+  \label{eq:Tk-etd}
+  T^k &= R^kR^{k\top} + \mathrm{diag}\bigl(\varphi_n(\lx)^2\bigr)\,\lx, \\
+  \bigl(R^kR^{k\top}\bigr)_{nn} &= \frac{c_n(\lx)^2}{\dt_n^2}\,[n{\ge}1] + \frac1{\dt_n^2}\,[n{\le}n_t{-}2],
+  \qquad
+  \bigl(R^kR^{k\top}\bigr)_{n,n+1} = -\frac{c_{n+1}(\lx)}{\dt_n\dt_{n+1}}. \notag
+\end{align}
+The diagonal-only $\varphi_n(\lx)^2\lx$ term (rather than a tridiagonal contribution, cf.\
+$M_1,M_2$ in \eqref{eq:Mk-decomp}) reflects that $\varphi_n(\lx)$ only ever rescales cell $n$'s
+\emph{own} flux term, and $D_x,A_x$ never mix time rows -- so the momentum-correction's
+feedback into $T^k$ is exactly diagonal, with no cross-row coupling to derive. Both \eqref{eq:Tk-etd}
+lines were checked to reduce to \code{precomp\_expsemi\_proj}'s known-good closed-form $D,e$
+arrays (main paper Algorithm~1) to machine precision on a uniform grid, and the correction
+formulas ($\rho$: $\widehat{\delta\rho}[n] = c_{n+1}(\lx)\hat w[n{+}1]/\dt_{n+1} -
+\hat w[n]/\dt_n$; $m$: unchanged in form, $\varphi_n(\lx)$ now row-dependent) were likewise
+checked end-to-end against \code{proj\_fokker\_planck\_expsemi} to $10^{-14}$
+(\code{validate\_nu.py}, checks 6--8). The DC mode ($k{=}1$, $\lx{=}0$) again has $c_n\equiv1$
+for every $n$, so $T^1=R^{1}R^{1\top}=D_t(\dt)D_t(\dt)^\top$ \emph{exactly} -- literally the same
+singular system as the CN scheme's $M_0$ (Section~\ref{sec:dc-mode}), handled identically (dense
+pseudo-inverse; Proposition~\ref{prop:kernel}'s null vector applies unchanged). Implementation:
+\code{projection\_expsemi\_nu.py}.
+
+\begin{remark}[An empirical surprise]
+The main paper's Fig.~6 motivation for preferring ETD is CN developing oscillatory ringing once
+$\eps/\dt\gtrsim1$. Grading pushes exactly there locally, so ETD-nu was expected to show a
+visible edge over CN-nu on a graded grid at moderate--large $\eps$. Testing head-to-head
+($\bar n_t=64$, $n_b=5$ -- smallest cell $\dt_{\min}\approx 4.9\times10^{-4}$, so
+$\eps/\dt_{\min}$ ranges from $\sim\!20$ to $\sim\!2000$ over $\eps\in\{0.1,1,4\}$): both schemes
+converged to comparable residuals and produced comparably small, comparable-magnitude negative
+excursions in $\tilde\rho$ (order $10^{-4}$--$10^{-3}$, both schemes, all three $\eps$) -- no
+dramatic CN instability materialized in this test. This is consistent with
+Theorem~\ref{thm:spd}: $M^k$'s SPD bound holds \emph{unconditionally} in $\{\dt_j\}$ and $\eps$,
+so whatever caused the ringing in the main paper's Fig.~6 test evidently needed more than
+$\eps/\dt\gtrsim1$ locally at a few cells to manifest (a globally under-resolved uniform grid,
+per Fig.~6's own caption, is a different regime than a few highly-refined graded cells embedded
+in an otherwise well-resolved grid). This note does not resolve the discrepancy -- it is left as
+an open empirical question rather than the confirmed win the theory predicted going in.
+\end{remark}
+
+%==============================================================================
+\section{The kinetic-energy prox}
+\label{sec:ke-prox}
+%==============================================================================
+
+The other half of the LADMM splitting -- the $y$-update, $\mathrm{Prox}_{J_h}$ (Proposition~3.2
+of the main paper) -- needs re-examining for a reason distinct from anything in
+Sections~\ref{sec:operators}--\ref{sec:etd}: those were all about the \emph{constraint}
+($\mathcal{L}_\eps$, the hard equality enforced by projection); this is about the
+\emph{objective}, and about how the LADMM iteration's internal penalty relates to the genuine,
+$\dt$-weighted physical $L^2$ norm used everywhere else (Section~\ref{sec:quadrature}).
+
+\subsection*{Notation: the pointwise density $J$ vs.\ the array-level objective}
+
+The kinetic-energy density is exactly the main paper's Eq.~(3)/(6),
+\begin{equation}
+  \label{eq:J-pointwise}
+  J(\rho,m) =
+  \begin{cases}
+    m^2/(2\rho), & \rho>0, \\
+    0,           & (\rho,m)=(0,0), \\
+    +\infty,     & \text{otherwise},
+  \end{cases}
+\end{equation}
+a single closed, proper, convex function of a \emph{scalar pair} $(\rho,m)\in\RR\times\RR$ (the
+perspective function of $m^2/2$). The $y$-update solves, for the \emph{whole} $(n_t\times n_x)$
+array $(\rho,m)$ at once,
+\begin{equation}
+  \label{eq:prox-array}
+  (\rho,m)^{k+1} = \arg\min_{\rho,m}\ F(\rho,m) + \frac{\gamma}{2}\bigl\|(\rho,m)-z\bigr\|_2^2,
+\end{equation}
+\begin{equation}
+  \label{eq:prox-array-norm}
+  \bigl\|(\rho,m)-z\bigr\|_2^2 := \sum_{n=1}^{n_t}\sum_{i=1}^{n_x}
+  \Bigl[(\rho_{n,i}-\rho^z_{n,i})^2 + (m_{n,i}-m^z_{n,i})^2\Bigr],
+\end{equation}
+where $\|\cdot\|_2$ is the \emph{plain, unweighted} (array-index/Frobenius) Euclidean norm over
+every cell jointly -- \emph{not} the $\dt_n\dx$-weighted norm \code{norm\_fn} measures
+(Section~\ref{sec:quadrature}; see the remark at the end of this section) -- and
+$F(\rho,m):=\sum_{n,i}J(\rho_{n,i},m_{n,i})$ is the \emph{unweighted} sum of the pointwise density
+\eqref{eq:J-pointwise}. This $F$, not the physically-normalized
+$J_h(\rho,m):=\sum_{n,i}\dt_n\dx\,J(\rho_{n,i},m_{n,i})$ that actually approximates
+$\iint J\,dx\,dt$, is what \code{prox\_ke\_cc} literally implements.
+
+\subsection*{The uniform-grid convention}
+
+Both $F$ and the norm in \eqref{eq:prox-array} are sums of independent per-cell terms, so the
+minimization separates exactly into $n_t n_x$ scalar-pair problems, one per cell:
+\begin{equation}
+  \label{eq:prox-uniform}
+  (\rho,m)^{k+1}_{n,i} = \mathrm{Prox}_{\sigma J}\bigl(\rho^z_{n,i}, m^z_{n,i}\bigr)
+  := \arg\min_{\rho,m}\ J(\rho,m) + \frac{1}{2\sigma}\Bigl[(\rho-\rho^z_{n,i})^2+(m-m^z_{n,i})^2\Bigr],
+  \qquad \sigma = 1/\gamma,
+\end{equation}
+this time with the \emph{ordinary} $\RR^2$ Euclidean distance for that single cell -- exactly
+\code{prox\_ke\_cc}'s cubic solve, called with \code{sigma=1/gamma}, no $\dt,\dx$ anywhere. This
+is harmless on a uniform grid: since $J_h = \dt\dx\cdot F$ there ($\dt\dx$ the same constant
+factored out of every cell), minimizing $F$ and minimizing $J_h$ have the \emph{same} minimizer;
+$\gamma,\tau$ were simply tuned, empirically, for whichever global constant multiple of the
+physical objective $F$ happens to be -- costing nothing in correctness, only in how those
+constants are calibrated for convergence \emph{speed}.
+
+\subsection*{Why this stops being free once $\dt$ varies}
+
+That cancellation used one fact: $J_h=\dt\dx\cdot F$ only for a \emph{single shared} $\dt\dx$.
+Once $\dt_n$ varies by row, $J_h(\rho,m)=\sum_{n,i}\dt_n\dx\,J(\rho_{n,i},m_{n,i})$ is no longer
+$F$ times a global constant -- it is $F$ with a genuinely row-dependent reweighting, and
+computing $\mathrm{Prox}_{(1/\gamma)F}$ (reusing \eqref{eq:prox-uniform} unmodified) would
+minimize the \emph{wrong} function: a narrow cell's row would be penalized in the KE term exactly
+as much as a wide cell's, even though its true contribution to $\int J\,dt$ is proportionally
+smaller.
+
+\subsection*{The fix: rescale $\sigma$ by the cell's relative width}
+
+The literal physical fix -- replace $F$ by $J_h$ throughout -- would separate exactly as
+\eqref{eq:prox-uniform} did, but with $\sigma_n = \dt_n\dx/\gamma$ instead of $1/\gamma$: correct,
+but it also rescales the \emph{overall} magnitude of $\sigma$ by $\dt_n\dx\sim1/(n_tn_x)$, forcing
+$\gamma,\tau$ to be recalibrated from scratch (they were tuned against $F$, not $J_h$).
+\code{prox\_ke\_cc\_nu} (\code{prox\_nu.py}) instead keeps $F$'s calibration and reweights only
+\emph{relative to the grid's own average width}, so nothing changes on average: row $n$ solves,
+\emph{independently for each spatial index $i$}, the scalar-pair problem
+\begin{equation}
+  \label{eq:prox-relative}
+  (\rho,m)^{k+1}_{n,i} = \arg\min_{\rho,m}\ \frac{\dt_n}{\dt_\mathrm{ref}}\,J(\rho,m)
+  + \frac{1}{2\sigma}\Bigl[(\rho-\rho^z_{n,i})^2+(m-m^z_{n,i})^2\Bigr],
+  \qquad \dt_\mathrm{ref} := \tfrac1{n_t} = \overline{\dt_n},
+\end{equation}
+exactly $n_x$ separate cubic solves per row $n$, all sharing the same weight $\dt_n/\dt_\mathrm{ref}$
+(which depends only on $n$, since $\dx$ is uniform across $i$) but each seeing its \emph{own}
+$\rho^z_{n,i},m^z_{n,i}$ and producing its \emph{own} $(\rho,m)^{k+1}_{n,i}$ -- not one vector-valued
+problem solved jointly across $i$. Exactly $1$ for every row when the grid \emph{is} uniform, recovering \eqref{eq:prox-uniform}
+verbatim. Multiplying through by $\sigma$ and absorbing $\dt_n/\dt_\mathrm{ref}$ into an effective
+step size turns \eqref{eq:prox-relative} back into the \emph{unmodified} prox
+\eqref{eq:prox-uniform} with
+\begin{equation}
+  \sigma_\mathrm{eff}[n] = \sigma\,\frac{\dt_n}{\dt_\mathrm{ref}},
+\end{equation}
+exactly \code{prox\_nu.py}'s formula, applied row-by-row to the same cubic solve
+\eqref{eq:prox-uniform} uses -- no new algebra in the cubic, only in what step size each row
+hands it. $\dx$ needs no analogous correction: it is uniform across $x$ for every row alike, so
+(exactly as $\dt$ was on the uniform grid) it stays a shared constant already absorbed into
+however $\gamma$ was calibrated, never appearing explicitly.
+
+\subsection*{Would a symmetrically-weighted penalty be more consistent?}
+
+A tempting alternative to \eqref{eq:prox-relative}: weight the \emph{penalty} by $\dt_n\dx$ too,
+so both terms of the $y$-update are literally Riemann-sum approximations of the same continuous
+integral -- again, one scalar-pair problem per $(n,i)$, sharing $n$'s weight:
+\begin{equation}
+  \label{eq:prox-symmetric}
+  (\rho,m)^{k+1}_{n,i} = \arg\min_{\rho,m}\ \dt_n\dx\,J(\rho,m)
+  + \frac{\gamma}{2}\,\dt_n\dx\Bigl[(\rho-\rho^z_{n,i})^2+(m-m^z_{n,i})^2\Bigr].
+\end{equation}
+Dividing through by the shared positive constant $\dt_n\dx$ makes it cancel \emph{completely},
+leaving exactly
+$(\rho,m)^{k+1}_{n,i}=\arg\min_{\rho,m} J(\rho,m)+\frac{\gamma}{2}[(\rho-\rho^z_{n,i})^2+(m-m^z_{n,i})^2]$ -- the
+\emph{same, constant} $\sigma=1/\gamma$ prox as \eqref{eq:prox-uniform}, with \emph{no} row
+dependence at all. This is not special to this problem: whenever the \emph{same} weight
+multiplies both the objective term and the penalty term of a separable prox, it cancels out of
+the argmin identically, regardless of what that weight is. So \eqref{eq:prox-relative}'s row
+dependence is only possible \emph{because} it is asymmetric -- weighting $J$ but not the penalty
+-- and any "more consistent"-looking symmetric weighting would silently discard it.
+
+Whether that asymmetry is the right trade is exactly the open question this note flags rather
+than resolves. The penalty term in \eqref{eq:prox-symmetric} is not private to the $y$-update --
+it is (half of) the \emph{same} shared augmented-Lagrangian term $\frac{\gamma}{2}\|Ax-y\|^2$ that
+the $x$-update (the projection of Sections~\ref{sec:operators}--\ref{sec:etd}) is implicitly
+extremized against. Weighting it symmetrically only in the $y$-update, without doing the same in
+the $x$-update, would make the two halves of ADMM implicitly extremize \emph{different}-metric
+approximations of what is supposed to be one shared penalty term. Doing it consistently in
+\emph{both} halves would require the projection to use the $\dt$-weighted-$L^2$ adjoint instead
+of the Euclidean one -- and Remark~\ref{rem:gauge} already documents, empirically, that this
+specific substitution breaks the projection (it stops being idempotent). So a fully
+weight-consistent ADMM is not currently available as a drop-in change: \eqref{eq:prox-relative}
+is what the reference implementation uses \emph{today}, a deliberate asymmetric choice that
+produces useful row-dependence precisely because it does \emph{not} try to be a symmetric,
+"fully physical" weighting of the whole augmented Lagrangian -- not a proof that it is the
+uniquely correct one.
+
+\begin{remark}[Two different norms, two different roles -- not to be confused]
+This section and Section~\ref{sec:quadrature} weight $\dt_n$ into two \emph{different} places
+for two \emph{different} reasons, and they need not agree: \code{norm\_fn}/\code{dual\_norm\_fn}
+$\dt_n\dx$-weight the \emph{diagnostic} residual norms used only for the LADMM stopping
+criterion, entirely outside the iterate updates; \code{prox\_ke\_cc\_nu}'s
+$\dt_n/\dt_\mathrm{ref}$ reweights the \emph{objective} inside the $y$-update itself, changing
+what point the prox returns. Conflating the two would either double-count the weighting (using
+$\dt_n\dx$ instead of the dimensionless $\dt_n/\dt_\mathrm{ref}$ inside the prox) or under-correct
+it (using the diagnostic norm's weighting, which also carries a $\dx$ factor the prox never
+needed).
+\end{remark}
+
+This reduces to the uniform-grid pipeline exactly: \code{validate\_nu.py}'s full-pipeline
+reduction checks (CN and its ETD counterpart alike) already match the \emph{full} LADMM
+trajectory -- prox included -- to $10^{-4}$ against the uniform-grid pipeline; this section
+derives what those checks were silently already confirming.
+
+%==============================================================================
+\section{Explicit norms of every prox, side by side}
+\label{sec:norms-all}
+%==============================================================================
+
+The LADMM loop (\code{ladmm.py}) has exactly two proxes -- \code{prox\_f1} (the $x$-update, the
+FP projection of Sections~\ref{sec:operators}--\ref{sec:etd}) and \code{solve\_y} (the $y$-update,
+the KE prox of Section~\ref{sec:ke-prox}) -- plus the diagnostic-only \code{norm\_fn}/
+\code{dual\_norm\_fn} of Section~\ref{sec:quadrature}. This section puts the norm each one
+\emph{actually} uses side by side, then works out explicitly what replacing each with a genuine
+$\dt_n\dx$-weighted (Riemann-sum) norm would look like.
+
+\subsection*{What the code minimizes today}
+
+\begin{enumerate}
+\item \textbf{$x$-update / FP projection} (\code{prox\_f1} $\to$
+  \code{proj\_fokker\_planck\_banded\_nu} / \code{\_expsemi\_nu}):
+  \begin{equation}
+    \label{eq:proj-norm-today}
+    (\tilde\rho,b)^{k+1} = \arg\min_{(\tilde\rho,b)\,\in\,\Ch(\dt)}\ \
+    \underbrace{\sum_{j,i}(\tilde\rho_{j,i}-\mu_{j,i})^2}_{\text{staggered }\tilde\rho,\ n_t{-}1\text{ edges}}
+    \ + \
+    \underbrace{\sum_{n,i}(b_{n,i}-\beta_{n,i})^2}_{\text{staggered }b,\ n_t\text{ centers}},
+  \end{equation}
+  the \emph{plain, unweighted} array-index Euclidean norm on both variables -- no $\dt$, no $\dx$,
+  anywhere. This is a hard-constraint (indicator-function) prox: \code{prox\_f1}'s \code{step}
+  argument is passed through but the projection functions themselves take no step/sigma parameter
+  at all, because the prox of an indicator function is the projection \emph{regardless} of the
+  prox parameter -- so the only thing that can vary here is which norm defines "closest," never a
+  magnitude. It is this norm -- via the plain transposes $D_t^\top,A_t^\top$ -- that
+  Section~\ref{sec:operators}'s $\mathrm{Gram}+\lx I$ structure (Proposition~\ref{prop:gram}) is
+  built from.
+\item \textbf{$y$-update / KE prox} (\code{solve\_y} $\to$ \code{prox\_ke\_cc\_nu}), restating
+  \eqref{eq:prox-relative}:
+  \begin{equation}
+    \label{eq:ke-norm-today}
+    (\rho,m)^{k+1}_{n,i} = \arg\min_{\rho,m}\ \ \frac{\dt_n}{\dt_\mathrm{ref}}\,J(\rho,m)
+    \ + \ \underbrace{\frac{\gamma}{2}\Bigl[(\rho-\rho^z_{n,i})^2+(m-m^z_{n,i})^2\Bigr]}_{\text{plain, unweighted}},
+  \end{equation}
+  again a plain Euclidean penalty; only the \emph{objective} $J$ picks up a weight, and even that
+  is the \emph{relative} $\dt_n/\dt_\mathrm{ref}$, not the absolute physical $\dt_n\dx$ -- $\dx$
+  never appears (harmless, since $\dx$ is the same constant for every entry: see the end of
+  Section~\ref{sec:ke-prox}).
+\item \textbf{Diagnostics only} (\code{norm\_fn}/\code{dual\_norm\_fn}, Section~\ref{sec:quadrature}):
+  the genuine $\dt_n\dx$ Riemann-sum norm, $\dx\sum_j\dt_j^{\mathrm{dual}}\tilde\rho_j^2 +
+  \dx\sum_n\dt_n\,m_n^2$ -- but this is used \emph{only} to decide when to stop iterating
+  (Section~\ref{sec:quadrature}'s $\eps_D,\eps_P$); it never enters the formula that produces
+  $x^{k+1}$ or $y^{k+1}$.
+\end{enumerate}
+
+Neither prox that actually \emph{defines} an iterate uses the diagnostic norm. This is not an
+oversight to reconcile casually -- the rest of this section shows why fully doing so is either
+free (the $y$-update: it cancels) or blocked on an open problem (the $x$-update).
+
+\subsection*{$y$-update: already worked out}
+
+Weighting \emph{both} terms of \eqref{eq:ke-norm-today} by the same $\dt_n\dx$
+(\eqref{eq:prox-symmetric}) cancels identically, collapsing back to the plain, unweighted,
+constant-$\sigma=1/\gamma$ prox \eqref{eq:prox-uniform} -- no row dependence survives. See the
+subsection "Would a symmetrically-weighted penalty be more consistent?" above for the full
+derivation.
+
+\subsection*{$x$-update: what a $\dt_n\dx$-weighted projection would look like}
+
+Define diagonal weight matrices for the physical ($\dt_n\dx$-Riemann-sum) inner product on each
+staggered variable -- exactly \code{norm\_fn}'s weights (Section~\ref{sec:quadrature}):
+\begin{equation}
+  W_{\tilde\rho} = \dx\cdot\mathrm{diag}(\dt^{\mathrm{dual}}) \in\RR^{(n_t-1)\times(n_t-1)},
+  \qquad
+  W_b = \dx\cdot\mathrm{diag}(\dt) \in\RR^{n_t\times n_t}.
+\end{equation}
+The fully weighted projection would replace \eqref{eq:proj-norm-today} by
+\begin{equation}
+  \label{eq:proj-norm-weighted}
+  (\tilde\rho,b)^{k+1} = \arg\min_{(\tilde\rho,b)\,\in\,\Ch(\dt)}\ \
+  \sum_j \dt_j^{\mathrm{dual}}\dx\,(\tilde\rho_{j,i}-\mu_{j,i})^2
+  \ + \ \sum_{n,i} \dt_n\dx\,(b_{n,i}-\beta_{n,i})^2.
+\end{equation}
+As with the $y$-update, $\dx$ is a single global constant shared by every term here (space is
+never graded in this note), so it factors out and cancels from the argmin exactly like any shared
+constant weight -- the only physically meaningful content of \eqref{eq:proj-norm-weighted} is the
+\emph{time} weight, $\dt^{\mathrm{dual}}$ and $\dt$.
+
+Standard fact for weighted least squares onto a linear constraint $\{Lx=d\}$: minimizing
+$(x-v)^\top W(x-v)$ for SPD diagonal $W$, instead of the plain $\|x-v\|_2^2$, replaces every plain
+adjoint $L^\top$ in the normal equations by the $W$-adjoint $L^{*W}:=W^{-1}L^\top$,
+\begin{equation}
+  x^{k+1} = v - W^{-1}L^\top\bigl(LW^{-1}L^\top\bigr)^{-1}(Lv-d)
+\end{equation}
+-- i.e.\ \eqref{eq:Mk-factored}/\eqref{eq:Mk-decomp} with every $D_t^\top,A_t^\top$ replaced by
+$D_t^{*W}, A_t^{*W}$. Concretely for $D_t$: the vector $D_t^\top$ acts on lives in the
+\emph{cell}-indexed space (Section~\ref{sec:entries}), whose natural physical weight is
+$\dx\,\mathrm{diag}(\dt)$; using $(D_t^\top v)_j = v_{j+1}/\dt_{j+1}-v_j/\dt_j$,
+\begin{equation}
+  \label{eq:Dt-weighted-adjoint}
+  D_t^{*W}(v)_j := \frac{1}{\dt_j^{\mathrm{dual}}}\bigl(D_t^\top[\dt\odot v]\bigr)_j
+  = \frac{1}{\dt_j^{\mathrm{dual}}}\Bigl(\dt_{j+1}\frac{v_{j+1}}{\dt_{j+1}} - \dt_j\frac{v_j}{\dt_j}\Bigr)
+  = \frac{v_{j+1}-v_j}{\dt_j^{\mathrm{dual}}},
+\end{equation}
+which collapses to the ordinary divided difference of $v$ on the dual/staggered grid -- the
+textbook "physically natural" finite-difference adjoint. Its kernel is exactly $\mathrm{span}\{1_{n_t}\}$:
+$D_t^{*W}(1_{n_t})_j = (1-1)/\dt_j^{\mathrm{dual}}=0$ identically, recovering the continuum's
+constant-gauge direction that Remark~\ref{rem:gauge} says the plain Euclidean adjoint fails to
+reproduce (Proposition~\ref{prop:kernel}). So \eqref{eq:Dt-weighted-adjoint} is, explicitly, the
+substitution Remark~\ref{rem:gauge} refers to.
+
+But swapping $D_t^\top\to D_t^{*W}$ (and $A_t^\top\to A_t^{*W}$, analogously) into
+\eqref{eq:Mk-factored} does more than rescale $M^k$'s entries: Proposition~\ref{prop:gram}'s proof
+is an algebraic identity built on $D_t,A_t$ appearing \emph{together with their own plain
+transposes} in $(D_t+\eps\lx A_t)(D_t+\eps\lx A_t)^\top$. Weighting only the transpose side of
+that product (leaving $D_t,A_t$ themselves unweighted) breaks the cancellation the proof relies
+on -- and empirically, in this codebase, the resulting operator no longer satisfies the
+projection's idempotency identity (Remark~\ref{rem:gauge}). Re-deriving a correct SPD, idempotent
+projection under this weighted metric from scratch -- if one exists -- is exactly the open problem
+Remark~\ref{rem:gauge} flags; \eqref{eq:proj-norm-today}, the plain Euclidean projection, is what
+the reference implementation uses today.
+
+\subsection*{Summary}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.15\textwidth}p{0.19\textwidth}p{0.19\textwidth}p{0.35\textwidth}@{}}
+\toprule
+prox & objective weight (today) & penalty/metric weight (today) & fully $\dt\dx$-weighted \\
+\midrule
+$x$-update (projection) & n/a (hard constraint) & Euclidean, unweighted &
+  needs $D_t^{*W},A_t^{*W}$ -- breaks idempotency (open) \\[2pt]
+$y$-update (KE prox) & relative $\dt_n/\dt_\mathrm{ref}$ & Euclidean, unweighted &
+  cancels completely $\to$ \eqref{eq:prox-uniform} \\[2pt]
+diagnostics (\code{norm\_fn}) & n/a & genuine $\dt_n\dx$ &
+  already exactly this \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%==============================================================================
+\section{What is gained, what is lost}
+\label{sec:gained-lost}
+%==============================================================================
+
+\subsection{Gained}
+Local time resolution exactly where the marginal boundary data forces it, at a cost in cell
+count that is $O(2^{n_b})$ per end rather than $O(\bar n_t)$ globally (grading $n_b=5$ cells
+costs 62 extra cells per end; matching that same near-boundary resolution with a \emph{uniform}
+grid would require shrinking $\dt$ everywhere, i.e.\ $O(\bar n_t\cdot 2^{n_b})$ total cells).
+Empirically (\code{scripts/sb\_gaussian\_} \code{refine\_ends\_vs\_uniform.py}), at matched \emph{base}
+resolution $\bar n_t$, grading the first/last $3$ cells cut the mean $L^2$ error against the
+Sinkhorn/analytical reference by roughly $3\times$ over the plain uniform grid at the same
+$\bar n_t$, concentrated almost entirely in the first/last $\sim\!10\%$ of the time domain (the
+interior, unrefined portion shows no measurable difference, as expected from
+Section~\ref{sec:entries}: every operator away from the graded region is untouched).
+
+\subsection{Lost -- precisely one step: the FP-projection's DC (spatial $k{=}1$) mode}
+Everything else in the LADMM iteration is exactly as expensive as on a uniform grid of the same
+total $n_t$:
+\begin{itemize}
+  \item $\mathrm{Prox}_{J_h}$ (the KE prox): pointwise in $(\tau_j,\xi_i)$, never touches $\dt_j$
+        except as a per-row \emph{scalar} multiplier on the step size
+        (Section~\ref{sec:ke-prox}: $\sigma_\mathrm{eff}=\sigma\,\dt_j/\dt_\mathrm{ref}$) --
+        $O(n_t n_x)$, unaffected.
+  \item The consensus map $\mathcal{A}$ and its adjoint: by Lemma~\ref{lem:At}, $A_t$ is
+        completely unchanged; the only Kronecker-factor that changes ($D_t$) never appears in
+        $\mathcal{A}$ at all (Eq.~(16) only uses $A_t,A_x$) -- $O(n_t n_x)$, unaffected.
+  \item The $n_x{-}1$ non-DC tridiagonal solves ($k=2,\dots,n_x$): still $O(n_t)$ each via a
+        row-varying (rather than constant) Thomas sweep, still fully vectorizable across modes
+        -- $O(n_t n_x)$ total, unaffected, and Theorem~\ref{thm:spd} shows this remains as
+        numerically safe as the uniform-grid case, unconditionally in $\{\dt_j\}$.
+\end{itemize}
+The one place cost genuinely increases is the single $k{=}1$ (DC) spatial mode's solve
+(Section~\ref{sec:dc-mode}): $O(n_t\log n_t)$ (spectral, via $T_t$) $\to$ $O(n_t^2)$ (dense
+pseudo-inverse mat-vec), \emph{every LADMM iteration}, plus a one-time $O(n_t^3)$ factorization
+cost at precompute (vs.\ $O(n_t)$ to just read off the closed-form eigenvalues $\lambda_t^i$).
+Since this is only $1$ of $n_x$ spatial modes, it is asymptotically dominated by the other
+$n_x{-}1$ modes' $O(n_t n_x)$ total whenever $n_t \lesssim n_x\log n_x$ -- but for a
+\emph{time}-refined grid specifically (large $n_t$, modest $n_x$, exactly the regime grading
+targets), the $O(n_t^2)$ DC-mode term can come to dominate the entire projection cost. A
+specialized $O(n_t)$--$O(n_t\log n_t)$ solver for this one tridiagonal-with-known-rank-deficiency
+system (exploiting Proposition~\ref{prop:kernel}'s explicit null vector, rather than a generic
+dense pseudo-inverse) is the concrete, actionable optimization this note leaves open.
+
+\subsection{ETD: generalized, but its expected advantage did not clearly show up}
+Section~\ref{sec:etd} generalizes the ETD scheme to non-uniform $\dt$ with the same closed-form
+character as the CN generalization -- no efficiency regression beyond the one already identified
+(the DC mode is literally the same singular system either way). The motivation for doing so was
+the main paper's Fig.~6 finding that CN rings once $\eps/\dt\gtrsim1$, exactly the regime grading
+pushes toward locally. The head-to-head test in Section~\ref{sec:etd}'s remark did not confirm a
+clear advantage at the settings tried -- both schemes behaved comparably. So: ETD-nu is available
+and validated (\code{projection\_expsemi\_nu.py}, \code{validate\_nu.py} checks 6--8) as a
+drop-in alternative to CN-nu wherever the main paper's own reasoning would recommend it, but this
+note does not claim to have empirically demonstrated the stability gain that motivated building
+it -- a broader sweep (more aggressive grading, larger $\eps$, non-Gaussian marginals) is needed
+before drawing a real conclusion either way.
+
+%==============================================================================
+\section{Conclusion}
+%==============================================================================
+
+The LADMM scheme, its consensus map, and its KE prox generalize to a dyadically graded
+non-uniform time grid with no algorithmic change and no loss of the SPD/stability guarantee that
+makes the uniform-grid tridiagonal solve safe (Theorem~\ref{thm:spd}, proved with the exact same
+argument as Lemma~A.2). Both the CN and ETD schemes generalize this way, the latter with no
+probing needed anywhere (Section~\ref{sec:etd}) -- both are implemented and validated to machine
+precision against their uniform-grid counterparts. The entire efficiency cost of non-uniformity
+is isolated to a single, identifiable step, shared by both schemes -- the singular DC spatial
+mode's linear solve inside the Fokker--Planck projection -- which degrades from a closed-form
+$O(n_t\log n_t)$ spectral divide to a dense $O(n_t^2)$ solve, because the discrete time-Laplacian
+is no longer diagonalized by a fixed fast transform once $\dt$ is non-uniform. A specialized
+solver for that one mode remains the concrete, actionable optimization this note leaves open; a
+broader empirical sweep to actually pin down when (if ever) ETD-nu earns its keep over CN-nu on a
+graded grid is the other.
+
+\end{document}

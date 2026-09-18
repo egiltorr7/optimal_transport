@@ -1,0 +1,522 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+
+\geometry{margin=1.1in}
+
+\newtheorem{remark}{Remark}
+
+\newcommand{\eps}{\varepsilon}
+\newcommand{\dt}{\Delta t}
+\newcommand{\dx}{\Delta x}
+\newcommand{\RR}{\mathbb{R}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\half}{\tfrac12}
+
+\title{Norms in the Non-Uniform-Grid LADMM Scheme}
+\author{Working note -- Steps 1--6 of \(N\) (Step 3 corrected)}
+\date{}
+
+\begin{document}
+\maketitle
+
+\emph{This is a working note, built incrementally. This draft covers only Step 1: pinning down,
+precisely, what norm is used \emph{where} in the code today. Nothing here yet addresses what the
+norms \emph{should} be -- that is Step 2, once this step is confirmed.}
+
+%==============================================================================
+\section*{Step 1: The two grids, and the norm each one currently uses}
+%==============================================================================
+
+\subsection*{1a. Grid points, cell centers, and what lives where}
+
+Time edges $t_0=0<t_1<\dots<t_{n_t}=1$; cell $j+\half$ (for $j=0,\dots,n_t-1$) is the interval
+$(t_j,t_{j+1})$, with width $\dt_{j+\half}:=t_{j+1}-t_j$. Space edges
+$x_0=0<x_1<\dots<x_{n_x}=1$, uniform, $\dx=1/n_x$; cell $i+\half$ (for $i=0,\dots,n_x-1$) has width
+$\dx$. \emph{Integer indices are always grid points (edges); half-integer indices are always cell
+centers} -- exactly the convention the main paper already uses for the space marginals
+$\mu_{i+\half},\nu_{i+\half}$.
+
+\begin{itemize}
+\item \textbf{Collocated variable $y=(\rho,m)$} (touched by the KE prox): lives at every
+  $(j+\half,\,i+\half)$, $j=0,\dots,n_t-1$, $i=0,\dots,n_x-1$ -- $n_t n_x$ points, cell-centered in
+  \emph{both} directions.
+\item \textbf{Staggered variable $x=(\tilde\rho,b)$} (touched by the projection):
+  \begin{itemize}
+  \item $\tilde\rho$ is staggered \emph{in time}: it lives at $(j,\,i+\half)$ for the
+    \emph{interior} time edges $j=1,\dots,n_t-1$ (space still cell-centered), $i=0,\dots,n_x-1$ --
+    $(n_t-1)n_x$ points. The two boundary edges $j=0,n_t$ carry the \emph{fixed} data
+    $\mu_{i+\half}:=\tilde\rho_{0,i+\half}$, $\nu_{i+\half}:=\tilde\rho_{n_t,i+\half}$ -- not part
+    of the optimization variable.
+  \item $b$ is staggered \emph{in space}: it lives at $(j+\half,\,i)$ for time centers
+    $j=0,\dots,n_t-1$, \emph{interior} space edges $i=1,\dots,n_x-1$ -- $n_t(n_x-1)$ points. The
+    two boundary edges $i=0,n_x$ carry the fixed homogeneous Neumann data $b=0$.
+  \end{itemize}
+\end{itemize}
+
+A consensus map $\mathcal{A}$ (time/space averaging) turns $x$ into something living on the same
+$(j+\half,i+\half)$ grid as $y$, so the ADMM constraint $\mathcal{A}x=y$ compares like with like.
+Nothing in this step needs $\mathcal{A}$'s formula -- just that $x$ and $y$ genuinely live on
+different point sets.
+
+\subsection*{1b. Where a norm is actually used}
+
+Three distinct places in the code involve a norm on one of these variables.
+
+\paragraph{1. The $x$-update (projection, \code{prox\_f1} in \code{ladmm.py}).} Solves, for the
+staggered $(\tilde\rho,b)$, $x^{k+1}=\arg\min_{x\,\in\,\text{constraint set}}\|x-v\|^2$ with the
+\textbf{plain, unweighted Euclidean norm}:
+\[
+  \|x-v\|^2 = \sum_{j=1}^{n_t-1}\sum_{i=0}^{n_x-1}
+  \bigl(\tilde\rho_{j,i+\half}-v^{\tilde\rho}_{j,i+\half}\bigr)^2
+  \ + \
+  \sum_{j=0}^{n_t-1}\sum_{i=1}^{n_x-1}
+  \bigl(b_{j+\half,i}-v^{b}_{j+\half,i}\bigr)^2,
+\]
+no $\dt$, no $\dx$, anywhere.
+
+\paragraph{2. The $y$-update (KE prox, \code{solve\_y} in \code{pipeline\_nu.py}, calling
+\code{prox\_ke\_cc\_nu}).} Solves, independently for \emph{every} cell $(j+\half,i+\half)$,
+$j=0,\dots,n_t-1$, $i=0,\dots,n_x-1$:
+\begin{align*}
+  (\rho,m)^{k+1}_{j+\half,i+\half} &= \arg\min_{\rho,m}\ \frac{\dt_{j+\half}}{\dt_\mathrm{ref}}\,J(\rho,m)
+  \ + \ \frac{\gamma}{2}\Bigl[(\rho-\rho^z_{j+\half,i+\half})^2 + (m-m^z_{j+\half,i+\half})^2\Bigr], \\
+  \dt_\mathrm{ref} &:= \frac1{n_t} = \frac1{n_t}\sum_{j=0}^{n_t-1}\dt_{j+\half}.
+\end{align*}
+The \emph{penalty} half (the $\frac{\gamma}{2}[\cdots]$ term -- the actual distance being
+minimized) is again the \textbf{plain, unweighted Euclidean norm} on the single cell
+$(\rho,m)\in\RR^2$. Only the \emph{objective} $J$ picks up a weight, and it is the
+\emph{relative} $\dt_{j+\half}/\dt_\mathrm{ref}$ (dimensionless, averages to $1$ over
+$j=0,\dots,n_t-1$), not the absolute physical $\dt_{j+\half}\dx$ -- $\dx$ never appears.
+(This looks like a weaker, ad hoc substitute for the absolute weight -- it isn't; Step~3
+shows the two are the same minimizer under a rescaled penalty constant.)
+
+\paragraph{3. The ADMM stopping criterion (\code{norm\_fn}/\code{dual\_norm\_fn} in
+\code{pipeline\_nu.py}).} This is the \emph{only} place the genuine, physically-normalized
+Riemann-sum norm is computed -- and it is computed slightly differently depending on which of the
+two variables it is handed:
+\begin{align*}
+  \|x\|^2_\mathrm{diag} &= \dx\sum_{j=1}^{n_t-1}\sum_{i=0}^{n_x-1} \dt_j^\mathrm{dual}\,
+  \tilde\rho_{j,i+\half}^{\,2}
+  \ + \
+  \dx\sum_{j=0}^{n_t-1}\sum_{i=1}^{n_x-1} \dt_{j+\half}\,b_{j+\half,i}^{\,2}, \\
+  \dt_j^\mathrm{dual} &:= \half\bigl(\dt_{j-\half}+\dt_{j+\half}\bigr),
+\end{align*}
+\[
+  \|y\|^2_\mathrm{diag} = \dx\sum_{j=0}^{n_t-1}\sum_{i=0}^{n_x-1} \dt_{j+\half}\,\rho_{j+\half,i+\half}^{\,2}
+  \ + \
+  \dx\sum_{j=0}^{n_t-1}\sum_{i=0}^{n_x-1} \dt_{j+\half}\,m_{j+\half,i+\half}^{\,2}.
+\]
+$\dt_j^\mathrm{dual}$ is the "dual cell" straddling interior edge $j$: half of neighboring cell
+$j-\half$ plus half of neighboring cell $j+\half$. But this norm is used \emph{only} to decide when
+to stop iterating (comparing residuals $D^k,P^k$ against tolerances) -- it never appears in the
+formula that actually produces $x^{k+1}$ or $y^{k+1}$.
+
+\subsection*{1c. The one-line summary}
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+where & grid & norm actually used \\
+\midrule
+$x$-update (projection) & staggered & plain Euclidean, unweighted \\
+$y$-update (KE prox, penalty term) & collocated & plain Euclidean, unweighted \\
+$y$-update (KE prox, objective term) & collocated & relative $\dt_{j+\half}/\dt_\mathrm{ref}$ only \\
+stopping criterion (\code{norm\_fn}) & either & genuine $\dt\,\dx$ Riemann sum \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent \textbf{The two proxes that actually define the iterates never use the physically-normalized
+norm.} Only the diagnostic, sitting outside the iteration entirely, does.
+
+%==============================================================================
+\section*{Step 2: What norm approximates the continuous integral?}
+%==============================================================================
+
+\subsection*{2a. The quadrature principle: primal cells vs.\ dual cells}
+
+The target is $\iint f(t,x)^2\,dx\,dt$ over $[0,1]^2$, and $f$ is only known through samples at
+one of our three point sets (1a). Space is uniform throughout, so its half of the quadrature is
+always the trivial $\dx$ per sample; the only real question is what weight a \emph{time} sample
+gets, and that depends on \emph{where in time} it sits.
+
+\paragraph{A cell-centered sample.} If $f$ is represented as piecewise-constant on the primal
+partition $\{(t_j,t_{j+1})\}_{j=0}^{n_t-1}$ -- i.e.\ sampled at the centers $t_{j+\half}$, which is
+exactly how $(\rho,m)$ live -- the composite midpoint rule is
+\[
+  \int_0^1 f(t)^2\,dt \approx \sum_{j=0}^{n_t-1} \dt_{j+\half}\, f_{j+\half}^{\,2},
+\]
+no derivation needed beyond "the sample \emph{is} the cell average," which is what a finite-volume
+field means.
+
+\paragraph{An edge-valued sample.} $\tilde\rho$ lives at interior time edges $t_j$, not centers --
+so what cell does $\tilde\rho_j$ represent an average \emph{over}? The natural answer: the
+\textbf{dual cell} $D_j$ centered at $t_j$ and bounded by its two neighboring \emph{primal cell
+centers},
+\[
+  D_j := \bigl(\tau_{j-\half},\,\tau_{j+\half}\bigr), \qquad \tau_{j+\half}:=\half(t_j+t_{j+1}).
+\]
+These dual cells exactly tile $[0,1]$ for the interior edges (each primal cell center is used as an
+endpoint by exactly two consecutive dual cells), so a midpoint rule on the \emph{dual} partition is
+just as valid a quadrature as the one on the primal partition. Its width is
+\begin{align*}
+  |D_j| &= \tau_{j+\half}-\tau_{j-\half}
+  = \half(t_j+t_{j+1}) - \half(t_{j-1}+t_j) \\
+  &= \half\bigl((t_{j+1}-t_j)+(t_j-t_{j-1})\bigr)
+  = \half\bigl(\dt_{j+\half}+\dt_{j-\half}\bigr) = \dt_j^\mathrm{dual},
+\end{align*}
+recovering \S1's $\dt_j^\mathrm{dual}$ \emph{by derivation}, not by definition: it is exactly the
+distance between the two primal cell centers flanking edge $t_j$, which is the width of the one
+dual cell for which $t_j$ is itself the midpoint.
+\[
+  \int_0^1 g(t)^2\,dt \approx \sum_{j=1}^{n_t-1} \dt_j^\mathrm{dual}\, g_j^{\,2}.
+\]
+
+\subsection*{2b. The three target formulas}
+
+Applying this -- primal weight $\dt_{j+\half}$ when time-centered, dual weight $\dt_j^\mathrm{dual}$
+when time-edge-valued, and $\dx$ throughout in space, since space is always cell-centered here and
+never graded -- gives the Riemann sum each variable \emph{should} use to approximate its own
+continuous $L^2$ norm:
+\begin{align*}
+  \|\rho\|^2, \|m\|^2 &\approx \dx\sum_{j=0}^{n_t-1}\sum_{i=0}^{n_x-1} \dt_{j+\half}\,
+    \rho_{j+\half,i+\half}^{\,2}, \quad \dx\sum_{j=0}^{n_t-1}\sum_{i=0}^{n_x-1}\dt_{j+\half}\,m_{j+\half,i+\half}^{\,2}
+    && \text{(collocated $y$)} \\
+  \|\tilde\rho\|^2 &\approx \dx\sum_{j=1}^{n_t-1}\sum_{i=0}^{n_x-1} \dt_j^\mathrm{dual}\,
+    \tilde\rho_{j,i+\half}^{\,2} && \text{(time-staggered)} \\
+  \|b\|^2 &\approx \dx\sum_{j=0}^{n_t-1}\sum_{i=1}^{n_x-1} \dt_{j+\half}\,
+    b_{j+\half,i}^{\,2} && \text{(space-staggered)}
+\end{align*}
+($b$'s natural weight would be $\dt_{j+\half}\dx_i^\mathrm{dual}$ by the same primal/dual logic
+applied to space instead of time -- but $\dx_i^\mathrm{dual}=\half(\dx+\dx)=\dx$ exactly, since
+space is uniform, so it silently collapses to the same $\dx$ used everywhere else.)
+
+\subsection*{2c. These are already \S1's diagnostic norm}
+
+Comparing term by term: \emph{this is exactly \code{norm\_fn}/\code{dual\_norm\_fn}}, already
+derived in \S1c rather than merely stated there. The stopping-criterion norm is not an ad hoc
+choice -- it is the one genuine, derivable Riemann-sum approximation of $\iint f^2\,dx\,dt$ for
+each of the three sample types.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.24\textwidth}p{0.1\textwidth}p{0.27\textwidth}p{0.27\textwidth}@{}}
+\toprule
+where & grid & norm actually used & matches the target norm? \\
+\midrule
+$x$-update (projection) & staggered & plain Euclidean, unweighted & \textbf{no} \\[2pt]
+$y$-update (KE prox, penalty) & collocated & plain Euclidean, unweighted & \textbf{no} \\[2pt]
+$y$-update (KE prox, objective) & collocated & relative $\dt_{j+\half}/\dt_\mathrm{ref}$ & yes, exactly -- see Step~3 \\[2pt]
+stopping criterion (\code{norm\_fn}) & either & genuine $\dt\dx$ Riemann sum & \textbf{yes} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%==============================================================================
+\section*{Step 3: Substituting the target norm into the $y$-update (KE prox)}
+%==============================================================================
+
+\subsection*{3a. A general fact about the scalar KE prox}
+
+Recall the pointwise kinetic-energy density, $J(\rho,m)=m^2/(2\rho)$ for $\rho>0$ (the perspective
+function of $m^2/2$). Every version of the $y$-update below is, cell by cell, an instance of
+\[
+  L(\rho,m) = a\,J(\rho,m) + \frac{b}{2}\Bigl[(\rho-\rho^z)^2+(m-m^z)^2\Bigr]
+\]
+for some positive constants $a$ (objective weight), $b$ (penalty weight) -- both possibly
+depending on $j$, but fixed once we are looking at one cell.
+
+\begin{quote}
+\textbf{Lemma.} The minimizer of $L$ depends on $a,b$ only through the ratio $\sigma:=a/b$.
+\end{quote}
+\begin{proof}
+$\partial_m L=0$: $\dfrac{a}{\rho}m+b(m-m^z)=0 \Rightarrow m = \dfrac{b\rho\,m^z}{a+b\rho}$.
+$\partial_\rho L=0$: $-\dfrac{a}{2\rho^2}m^2+b(\rho-\rho^z)=0$. Substituting $m$ and simplifying,
+\[
+  \rho-\rho^z = \frac{ab\,(m^z)^2}{2(a+b\rho)^2}.
+\]
+Write $\sigma:=a/b$, so $a+b\rho=b(\sigma+\rho)$; the $b^2$ in numerator and denominator cancel:
+\[
+  \rho-\rho^z = \frac{\sigma\,(m^z)^2}{2(\sigma+\rho)^2}.
+\]
+$b$ has dropped out entirely -- the stationarity condition, and hence $(\rho,m)$, depends on $a,b$
+only via $\sigma$. \qedhere
+\end{proof}
+
+This is exactly why \code{prox\_ke\_cc} takes one parameter \code{sigma}, not two: an overall
+positive scalar multiplying an \emph{unconstrained} objective never moves its minimizer, and $b$ is
+precisely that overall scalar once $\sigma=a/b$ is held fixed.
+
+\subsection*{3b. One elementary fact, used twice}
+
+Everything below is one consequence of the Lemma's proof, used in two different ways --
+\emph{multiplying an entire objective by a positive constant never moves its minimizer}:
+$\arg\min g = \arg\min c\,g$ for any $c>0$. (This is literally why $b$ dropped out of the Lemma:
+$L=b\cdot[\sigma J+\tfrac12 P]$, and $\arg\min L=\arg\min[\sigma J+\tfrac12 P]$ regardless of $b$.)
+
+\paragraph{Use 1: a row-dependent common factor cancels (recovers \S3's opening finding).} Write
+$a_j=c_j\tilde a$, $b_j=c_j\tilde b$ for a row-dependent $c_j$ but \emph{row-independent}
+$\tilde a,\tilde b$. Then $\sigma_j=a_j/b_j=\tilde a/\tilde b$ -- the \emph{same} for every $j$, no
+matter how wildly $c_j$ varies. This is exactly what happens when \S2's target norm,
+$\dt_{j+\half}\dx$, weights \emph{both} terms of the $y$-update:
+\begin{equation}
+  \label{eq:ke-symmetric}
+  (\rho,m)^{k+1}_{j+\half,i+\half} = \arg\min_{\rho,m}\ \dt_{j+\half}\dx\,J(\rho,m)
+  + \frac{\gamma}{2}\dt_{j+\half}\dx\,P, \qquad P:=(\rho-\rho^z)^2+(m-m^z)^2,
+\end{equation}
+here $c_j=\dt_{j+\half}\dx$, $(\tilde a,\tilde b)=(1,\gamma)$ -- so $\sigma_j\equiv1/\gamma$, and
+\eqref{eq:ke-symmetric} collapses to the plain, unweighted, uniform-grid prox, no row-dependence
+at all.
+
+\paragraph{Use 2: the code's formula \emph{is} $J_h$, not a compromise with it.} Now apply the same
+elementary fact the \emph{other} way: to one fixed row $j$, multiply the code's whole objective by
+the single \emph{global} constant $C:=\dt_\mathrm{ref}\dx$ (not row-dependent -- just one number):
+\begin{align}
+  C\cdot\Bigl[\frac{\dt_{j+\half}}{\dt_\mathrm{ref}}J(\rho,m)+\frac{\gamma}{2}P\Bigr]
+  &= \dt_\mathrm{ref}\dx\cdot\frac{\dt_{j+\half}}{\dt_\mathrm{ref}}J(\rho,m)
+  + \frac{\gamma\,\dt_\mathrm{ref}\dx}{2}P \notag\\
+  &= \underbrace{\dt_{j+\half}\dx}_{\text{literal } J_h\text{'s weight}}J(\rho,m)
+  + \frac{\hat\gamma}{2}P, \qquad \hat\gamma:=\gamma\,\dt_\mathrm{ref}\dx.
+  \label{eq:ke-equiv}
+\end{align}
+The $\dt_\mathrm{ref}$'s cancel exactly, leaving $\dt_{j+\half}\dx$ -- the literal, correct
+Riemann-sum weight for $\iint J\,dx\,dt$. Since $C>0$ is a global constant, the left- and
+right-hand sides of \eqref{eq:ke-equiv} have the \emph{same} minimizer. So: \textbf{the code's
+formula, using penalty parameter $\gamma$, computes exactly what the literal, physically-correct
+$J_h$-weighted objective would compute if it used penalty parameter $\hat\gamma=\gamma\,\dt_\mathrm{ref}\dx$
+instead.} Not proportionally, not approximately -- the identical minimizer, row by row.
+
+\subsection*{3c. Punch line for the $y$-update}
+
+There are really only \emph{two} distinct prox maps in this whole discussion, not three:
+\begin{enumerate}
+\item the \textbf{row-independent} map, $\sigma\equiv1/\gamma$ -- what \eqref{eq:ke-symmetric}
+  (weight everything by the target norm) collapses to;
+\item the \textbf{genuinely row-dependent} map, $\sigma_j\propto\dt_{j+\half}$ -- which the code's
+  formula and the literal $J_h$-weighted formula both compute, \emph{exactly}, once their penalty
+  constants are correctly identified ($\gamma\leftrightarrow\hat\gamma=\gamma\dt_\mathrm{ref}\dx$).
+\end{enumerate}
+The row-dependence the code has \emph{is} the physically correct $L^2$-quadrature weighting of the
+KE term -- not a compromise that trades correctness for calibration. The only free choice is which
+of the two equivalent, rescaled penalty constants ($\gamma$ or $\hat\gamma$) is the one you tune by
+hand; the code picks $\gamma$ so that number stays $O(1)$ and resolution-independent, rather than
+requiring you to separately track the tiny, $n_t n_x$-dependent $\hat\gamma$.
+
+%==============================================================================
+\section*{Step 4: Substituting the target norm into the $x$-update (projection)}
+%==============================================================================
+
+\subsection*{4a. A general fact about weighted projection onto a linear constraint}
+
+The $x$-update solves $x^\star=\arg\min_{x:\,Lx=d}\|x-v\|^2_W$ where $x=(\tilde\rho,b)$,
+$W$ is the diagonal weight matrix encoding whatever norm we choose, and $L$ is the (fixed,
+grid-dependent, but weight-independent) linear map built from $D_t,A_t,D_x$ that encodes the
+Fokker--Planck constraint.
+
+\begin{quote}
+\textbf{Lemma.} $x^\star = v - W^{-1}L^\top(LW^{-1}L^\top)^{-1}(Lv-d)$. If $W=cI$ for a single
+global scalar $c>0$, this equals the \emph{unweighted} ($W=I$) answer exactly.
+\end{quote}
+\begin{proof}
+Lagrangian $\tfrac12(x-v)^\top W(x-v)+\lambda^\top(Lx-d)$; stationarity gives
+$W(x-v)+L^\top\lambda=0$, so $x=v-W^{-1}L^\top\lambda$; substituting into $Lx=d$ gives
+$\lambda=(LW^{-1}L^\top)^{-1}(Lv-d)$, hence the formula. If $W=cI$, $W^{-1}=I/c$ and the two
+factors of $1/c$ (one in $W^{-1}L^\top$, one inside $(LW^{-1}L^\top)^{-1}=c(LL^\top)^{-1}$) cancel,
+leaving $v-L^\top(LL^\top)^{-1}(Lv-d)$ -- independent of $c$. \qedhere
+\end{proof}
+
+This is the projection analogue of Step 3's Lemma -- an overall global scalar is invisible -- but
+notice the hypothesis is much stronger here: \emph{every diagonal entry of $W$ must be equal}, not
+just proportional row-by-row within an independent subproblem, because $L$ mixes different
+coordinates of $x$ together in a single equation. Step 2's target norm has $W$ built from
+$\dt_{j+\half}$ and $\dt_j^\mathrm{dual}$, which are \emph{not} constant across $j$ once the grid
+is graded -- so the hypothesis of the Lemma is not met, and there is no automatic reason to expect
+cancellation this time.
+
+\subsection*{4b. Confirming it, concretely: the weighted adjoint of $D_t$}
+
+To make "no automatic reason" into a proof, compute what $L^\top$ becomes under $W$ and check
+whether it is even proportional to the unweighted $L^\top$ (if it were, $W$ would effectively act
+as a global rescaling on this piece, and Step 4a's cancellation would go through after all).
+Focus on $D_t$, the operator that actually changes under grading.
+
+$D_t$ maps $\tilde\rho$ (interior edges, index $j=1,\dots,n_t-1$) to a residual living at cell
+centers ($j+\half$, $j=0,\dots,n_t-1$); its Euclidean transpose (ignoring the boundary terms, which
+carry no free variable) is, for interior $j$,
+\[
+  (D_t^\top q)_j = \frac{q_{j-\half}}{\dt_{j-\half}} - \frac{q_{j+\half}}{\dt_{j+\half}}.
+\]
+
+\begin{quote}
+\textbf{Lemma (kernel of $D_t^\top$).} $\ker D_t^\top = \mathrm{span}\{\dt\}$ (the vector with
+entries $\dt_{j+\half}$), not $\mathrm{span}\{1\}$, unless the grid is uniform.
+\end{quote}
+\begin{proof}
+$(D_t^\top q)_j=0$ for every $j$ means $q_{j-\half}/\dt_{j-\half}=q_{j+\half}/\dt_{j+\half}$ for
+every interior $j$, i.e.\ $q_{j+\half}/\dt_{j+\half}$ is the same constant $C$ for every $j$, i.e.\
+$q_{j+\half}=C\,\dt_{j+\half}$. \qedhere
+\end{proof}
+
+Now weight domain (edges) by $\dt^\mathrm{dual}$ and codomain (cells) by $\dt$ -- exactly Step 2's
+target norm, $\dx$ dropped as always since it is a shared global constant. The weighted adjoint is
+$D_t^{*W}(q)_j := \frac{1}{\dt_j^\mathrm{dual}}\bigl(D_t^\top[\dt\odot q]\bigr)_j$; since
+$\dt_{j\pm\half}\cdot q_{j\pm\half}/\dt_{j\pm\half}=q_{j\pm\half}$, the $\dt$'s inside cancel and
+\[
+  D_t^{*W}(q)_j = \frac{q_{j-\half}-q_{j+\half}}{\dt_j^\mathrm{dual}}.
+\]
+Its kernel: $D_t^{*W}(q)_j=0 \Leftrightarrow q_{j-\half}=q_{j+\half}$ for every $j$
+$\Leftrightarrow q\equiv\mathrm{const}$, i.e.\ $\ker D_t^{*W}=\mathrm{span}\{1\}$.
+
+\textbf{$D_t^\top$ and $D_t^{*W}$ have different kernels} whenever the grid is non-uniform
+($\mathrm{span}\{\dt\}\neq\mathrm{span}\{1\}$ unless $\dt$ is constant), \textbf{and two linear
+maps with different kernels cannot be positive scalar multiples of one another.} So $D_t^{*W}$ is
+not "the same operator, just rescaled" -- it is a genuinely different operator, and Step 4a's
+Lemma does not apply. This is the rigorous version of "the target norm does not cancel out of the $x$-update":
+unlike Step 3, there is no algebraic shortcut available here.
+
+\subsection*{4c. Punch line for the $x$-update}
+
+Step 3 and Step 4 differ for a structural reason, not a coincidental one. The $y$-update is
+$n_tn_x$ \emph{unconstrained} scalar problems; a weight that is constant \emph{within each one} is
+always invisible, no matter how it varies \emph{across} them. The $x$-update is \emph{one}
+constrained problem; the constraint $Lx=d$ physically ties together coordinates that Step 2's
+target norm weights differently ($\tilde\rho$ by $\dt^\mathrm{dual}$, $b$ by $\dt$, both varying
+with $j$), so there is no shared scalar to divide out. Substituting the target norm here is not a
+free, cosmetic change the way it was for the KE prox -- it produces an honestly different operator,
+$D_t^{*W}$, with a different kernel, and (as flagged in the companion note's Remark on the gauge
+mismatch) that operator does not preserve the projection's own well-posedness when substituted in.
+
+\bigskip
+\noindent\emph{Stopping here for Step 4. Step 5 takes up the remaining question: under this same
+target-norm convention, are $\mathcal{A}$ and $\mathcal{A}^\top$ (the consensus map linking $x$ and
+$y$) still adjoint to each other?}
+
+%==============================================================================
+\section*{Step 5: Is $\mathcal{A}$ still adjoint to $\mathcal{A}^\top$ under the target norm?}
+%==============================================================================
+
+\subsection*{5a. The consensus map's time-averaging piece, today}
+
+\code{ladmm.py}'s $x$-update gradient step is \code{g = At\_fn(gamma*r - delta)} -- computed
+\emph{every} LADMM iteration, not just inside the projection's precomputed system. Its time half is
+$A_t$, mapping $\tilde\rho$ (interior edges $j=1,\dots,n_t-1$, plus fixed boundary $\mu,\nu$) to the
+collocated grid by averaging the two edges bounding each cell: linear part
+$(A_tv)_{j+\half} = \half v_j+\half v_{j+1}$ ($j=0,\dots,n_t-1$, boundary terms $\mu,\nu$ dropped
+as before). Collecting the coefficient of $v_j$ across the two cells it touches gives the Euclidean
+transpose
+\[
+  (A_t^\top q)_j = \half q_{j-\half} + \half q_{j+\half},
+\]
+the plain, unweighted average of $q$'s two neighboring cells -- exactly \code{interp\_t\_at\_rho},
+exactly what \code{At\_fn} calls today.
+
+\subsection*{5b. The weighted adjoint}
+
+Same recipe as Step 4b: weight the edge-space domain by $\dt^\mathrm{dual}$, the cell-space
+codomain by $\dt$,
+\[
+  A_t^{*W}(q)_j := \frac{1}{\dt_j^\mathrm{dual}}\bigl(A_t^\top[\dt\odot q]\bigr)_j
+  = \frac{\half\dt_{j-\half}q_{j-\half}+\half\dt_{j+\half}q_{j+\half}}{\dt_j^\mathrm{dual}}
+  = \frac{\dt_{j-\half}\,q_{j-\half}+\dt_{j+\half}\,q_{j+\half}}{\dt_{j-\half}+\dt_{j+\half}}.
+\]
+This is a genuine \emph{weighted} average of $q$'s two neighbors -- biased toward whichever
+neighboring cell is \emph{wider} -- not the plain $\half,\half$ average $A_t^\top$ computes.
+
+\subsection*{5c. They are not the same operator}
+
+$A_t^{*W}$ reduces to $A_t^\top$ exactly when $\dt_{j-\half}=\dt_{j+\half}$ (the two cells
+straddling edge $j$ happen to share the same width). On a genuinely graded grid this fails at
+essentially every interior edge. More to the point: no single global constant $c$ can make
+$A_t^{*W}=c\,A_t^\top$, because the two operators' \emph{relative} weighting of $q_{j-\half}$ vs
+$q_{j+\half}$ differs -- $A_t^\top$ always weighs them $1:1$; $A_t^{*W}$ weighs them
+$\dt_{j-\half}:\dt_{j+\half}$, a ratio that changes from edge to edge. A fixed $1:1$ ratio scaled
+by any single $c$ can never match a ratio that varies with $j$.
+
+\textbf{So no: $\mathcal{A}$ and $\mathcal{A}^\top$, as coded, are adjoint to each other only under
+the plain Euclidean inner product -- not under Step 2's target norm.}
+
+\subsection*{5d. What this widens}
+
+The space half of $\mathcal{A}$ needs no such check: $\dx_i^\mathrm{dual}=\half(\dx+\dx)=\dx$
+identically (space is never graded here), so its weight matrix is literally $\dx\cdot I$ -- a
+global scalar -- and Step 4a's Lemma applies directly: the space-averaging adjoint is unaffected.
+
+Only the time-averaging piece changes, but it appears in \emph{two} places, not one: inside the
+projection's precomputed $M^k$ system (Step 4, already flagged as the gauge-mismatch Remark in the
+companion note), \emph{and} directly inside \code{At\_fn}, called fresh at every single LADMM
+iteration's gradient step. Making the scheme target-norm-consistent is therefore not a
+one-line fix confined to the projection -- it touches the gradient computation that drives every
+$x$-update, too.
+
+\bigskip
+\noindent\emph{Stopping here for Step 5.}
+
+%==============================================================================
+\section*{Step 6: Why doesn't the penalty need to be physically weighted too?}
+%==============================================================================
+
+Step 3 showed the $y$-update's \emph{objective} is exactly $J_h$ -- a genuine approximation of
+$\iint J\,dx\,dt$. Its \emph{penalty} is still the plain, unweighted Euclidean $P$. That looks like
+an unresolved asymmetry: one term of the same optimization is measured in physical units, the
+other is not. It is not an oversight -- here is why.
+
+\subsection*{6a. The penalty term does not approximate anything continuous}
+
+The \emph{true} problem this whole scheme discretizes is: minimize $\iint J\,dx\,dt$ over
+$(\rho,m)$ satisfying the Fokker--Planck PDE, exactly. There is no "$Ax=y$" in that problem at
+all -- $x$ (staggered) and $y$ (collocated) are the \emph{same} physical field; splitting it into
+two copies linked by a consensus constraint, and penalizing $\|\mathcal{A}x-y\|^2$, is purely a
+discrete \emph{algorithmic} device introduced so ADMM can alternate between the projection and the
+KE prox. In the continuum this term is not merely small -- it does not exist. So there is no
+continuous integral for the penalty to approximate, unlike $J_h$, which approximates a term that
+genuinely is in the original problem. Asking "what is the $\dt\dx$-correct version of the penalty"
+is a category error: correctness for $J_h$ means \emph{consistency with the continuum}; correctness
+for the penalty means something else entirely -- see 6b.
+
+\subsection*{6b. What the penalty does need: one metric, shared by both updates}
+
+$(\gamma/2)\|\mathcal{A}x-y\|^2$ is \emph{one} term, split by ADMM into a gradient contribution on
+the $x$ side and a prox contribution on the $y$ side -- \code{ladmm.py}:
+\[
+  \underbrace{g = \mathtt{At\_fn}(\gamma r - \delta)}_{x\text{-side: gradient of the penalty}}
+  \ , \qquad
+  \underbrace{y=\arg\min_y f_2(y)+\tfrac{\gamma}{2}\|y-z\|^2}_{y\text{-side: prox against the penalty}}.
+\]
+$g$ is exactly $\nabla_x\bigl[\tfrac{\gamma}{2}\|\mathcal{A}x+By-b\|^2\bigr]+\mathcal{A}^\top\delta$
+computed with $\mathcal{A}^\top=$\code{At\_fn} -- and Step 5 established \code{At\_fn} is the
+\emph{Euclidean} adjoint. So the $x$-side already measures this penalty with the plain,
+unweighted metric -- the \emph{same} plain, unweighted metric the $y$-side penalty $P$ uses. The
+two halves of one shared term agree with each other. That agreement, not a match to any continuous
+quantity, is the actual requirement -- and it is exactly what today's code has.
+
+\subsection*{6c. Weighting only the $y$-side would break that agreement}
+
+Multiplying $P$ alone by $\dt_{j+\half}\dx$ (\S3, \eqref{eq:ke-symmetric}) -- without also changing
+\code{At\_fn} on the $x$-side to match -- would make the two halves of ADMM implicitly extremize
+\emph{different}-metric versions of what is supposed to be one shared penalty. That is a strictly
+worse inconsistency than the current one, not an improvement. Making it consistent on \emph{both}
+sides is exactly Step 4/5's target-norm-everywhere program, which needs $\mathcal{A}^{*W}\neq
+c\cdot\mathcal{A}^\top$ (Step 5c) and $D_t^{*W}\neq c\cdot D_t^\top$ (Step 4b) -- already proved to
+break the projection's own algebra.
+
+\subsection*{6d. Punch line}
+
+The asymmetry is the correct resolution, not a leftover compromise: the objective ($J_h$) has a
+continuum quantity to be faithful to, and is; the penalty has no continuum quantity to be faithful
+to, only an internal-consistency requirement between the $x$-update and $y$-update, and it meets
+that requirement (Euclidean, both sides). Making the penalty $\dt\dx$-weighted on \emph{both} sides
+to match $J_h$ is not forbidden in principle -- it is exactly the thing Steps 4--5 already showed
+is currently unavailable, because the operator that would have to change ($D_t^\top,A_t^\top$
+inside the projection) cannot be replaced without losing the algebraic identity the projection
+relies on.
+
+\bigskip
+\noindent\emph{Stopping here for Step 6. This closes the loop back to Remark~3
+(the gauge mismatch) in the companion note -- everything in Steps 4--6 is really one obstruction,
+seen from three angles (the projection's kernel, the consensus map's adjoint, and now the shared
+penalty's consistency).}
+
+\end{document}

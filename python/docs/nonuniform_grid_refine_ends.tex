@@ -1,0 +1,371 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{listings}
+
+\geometry{margin=1.1in}
+
+\newtheorem{lemma}{Lemma}
+
+\newcommand{\eps}{\varepsilon}
+\newcommand{\dt}{\Delta t}
+\newcommand{\dx}{\Delta x}
+\newcommand{\h}{h}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  columns=fullflexible,
+  keepspaces=true,
+  breaklines=true,
+  frame=single,
+}
+
+\title{Non-Uniform Time Grid: Refining the First and Last Cell}
+\author{Optimal Transport / Schr\"odinger Bridge Project}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This note specifies the simplest non-trivial non-uniform time grid we consider for the
+1D Python solver: take the uniform $n_t$-cell grid on $[0,1]$ and split only the first
+and last cell in half. It sets out the two grids the LADMM splitting actually uses --
+a staggered grid carrying the hard Fokker--Planck (FP) constraint, and a collocated grid
+carrying the kinetic-energy (KE) prox -- and derives the full discrete FP constraint on
+the refined-ends grid, row by row through both junctions. The surrounding solver
+(\code{operators\_nu.py}, \code{projection\_nu.py}, \code{prox\_nu.py},
+\code{pipeline\_nu.py}) is already generic over any strictly increasing edge sequence, so
+this grid requires no new solver code, only a new grid constructor -- implemented as
+\code{refine\_ends\_time\_grid} in \code{time\_grid.py} and regression-checked in
+\code{scripts/validate\_nu.py} (5/5 checks pass, including this grid).
+\end{abstract}
+
+%------------------------------------------------------------------------------
+\section{Two grids in the LADMM split}
+\label{sec:two-grids}
+%------------------------------------------------------------------------------
+
+The LADMM splitting (\code{pipeline\_nu.py}) carries two copies of the state, on two
+different grids, tied together by a consensus map:
+
+\begin{itemize}
+  \item \textbf{Constraint grid} (code: the \emph{x}-variable $(\mu,\psi)$). This is
+        where the FP constraint is enforced \emph{exactly}, via the projection
+        \code{proj\_fokker\_planck\_banded\_nu}. Staggered: density at interior time
+        edges $\times$ space cell centers,
+        \[
+          \mu(t_j,\xi_k), \qquad j=1,\ldots,n_t^{\mathrm{ref}}-1,\quad k=1,\ldots,n_x,
+        \]
+        and momentum at time cell centers $\times$ interior space nodes,
+        \[
+          \psi(\tau_i,x_k), \qquad i=0,\ldots,n_t^{\mathrm{ref}}-1,\quad k=1,\ldots,n_x-1,
+        \]
+        with $\mu(t_0,\cdot)=\rho_0$, $\mu(t_{n_t^{\mathrm{ref}}},\cdot)=\rho_1$ (fixed
+        marginals) and $\psi(\cdot,x_0)=\psi(\cdot,x_{n_x})=0$ (no-flux).
+  \item \textbf{KE grid} (code: the \emph{y}-variable $(\rho,m)$). This is where the
+        kinetic-energy prox \code{prox\_ke\_cc\_nu} acts, pointwise in $m^2/(2\rho)$, so
+        $\rho$ and $m$ must be \emph{collocated} -- both at cell centers, both axes:
+        \[
+          \rho(\tau_i,\xi_k),\ m(\tau_i,\xi_k), \qquad i=0,\ldots,n_t^{\mathrm{ref}}-1,\quad
+          k=1,\ldots,n_x.
+        \]
+\end{itemize}
+Space is uniform throughout ($n_x$ cells, $\dx=1/n_x$, edges $x_k=k\dx$, centers
+$\xi_k=(k-\tfrac12)\dx$) -- only the time axis is refined here, and only at the ends.
+
+\subsection*{The consensus map}
+
+\code{A\_fn} moves $(\mu,\psi)$ onto the KE grid's locations:
+\begin{equation}
+  \label{eq:consensus}
+  \hat\rho(\tau_i,\xi_k) = \tfrac12\bigl[\mu(t_i,\xi_k)+\mu(t_{i+1},\xi_k)\bigr],
+  \qquad
+  \hat m(\tau_i,\xi_k) = \tfrac12\bigl[\psi(\tau_i,x_{k-1})+\psi(\tau_i,x_k)\bigr],
+\end{equation}
+and the LADMM iteration drives $\hat\rho\to\rho$, $\hat m\to m$ while $\mu,\psi$ stays
+exactly FP-feasible and $\rho,m$ stays exactly KE-optimal. Note $\hat\rho$ only
+interpolates \emph{in time} (both sides share the same $\xi_k$) and $\hat m$ only
+interpolates \emph{in space} (both sides share the same $\tau_i$) -- $\psi$'s time
+location is $\tau_i$ on \emph{both} grids already, so refining the time grid never
+touches the momentum's time placement, only the density's.
+
+\begin{lemma}[Midpoint interpolation is exact regardless of cell width]
+\label{lem:midpoint}
+Let $t_i<t_{i+1}$ be any two grid edges and $\tau_i:=\tfrac12(t_i+t_{i+1})$ their
+midpoint (as \emph{every} cell center in this codebase is, by construction --
+\code{time\_grid.\_time\_grid\_from\_edges}). For any values $v_i,v_{i+1}$, let
+$L(t)$ be the unique affine function with $L(t_i)=v_i$, $L(t_{i+1})=v_{i+1}$. Then
+$L(\tau_i)=\tfrac12(v_i+v_{i+1})$, independent of $\dt_i=t_{i+1}-t_i$.
+\end{lemma}
+\begin{proof}
+$L(t)=v_i+(v_{i+1}-v_i)\frac{t-t_i}{\dt_i}$. At $t=\tau_i$, $t-t_i=\dt_i/2$, so
+$L(\tau_i)=v_i+\tfrac12(v_{i+1}-v_i)=\tfrac12(v_i+v_{i+1})$.
+\end{proof}
+So the plain average in \eqref{eq:consensus}'s $\hat\rho$ formula is exactly the value
+of the linear interpolant of $\mu$ \emph{at the cell center}, for \emph{any} $\dt_i$ --
+this is the reason \code{interp\_t\_at\_phi} needs no change on a non-uniform grid at
+all (\code{operators\_nu.py} reuses it verbatim from \code{operators.py}), and it is
+the key fact behind the derivation in Section~\ref{sec:fp}.
+
+%------------------------------------------------------------------------------
+\section{The refined-ends grid}
+%------------------------------------------------------------------------------
+
+Take the uniform $n_t$-cell grid and split \emph{only} cell $0$ ($[t_0,t_1]$) and cell
+$n_t-1$ ($[t_{n_t-1}, t_{n_t}]$) in half. Everything in between is untouched:
+\[
+\begin{array}{c|ccccccccc}
+\text{edges} & 0 & \h/2 & \h & 2\h & 3\h & \cdots & (n_t{-}1)\h & (n_t{-}1)\h + \h/2 & 1 \\
+\hline
+\text{cell width} & \multicolumn{2}{c}{\h/2} & \multicolumn{5}{c}{\h} & \multicolumn{2}{c}{\h/2}
+\end{array}
+\]
+So, writing $\h = 1/n_t$ for the \emph{base} resolution being refined,
+\begin{equation}
+  \label{eq:edges}
+  \mathbf{t} = \bigl[\,0,\ \tfrac{\h}{2},\ \h,\ 2\h,\ 3\h,\ \ldots,\ (n_t{-}1)\h,\
+  (n_t{-}1)\h + \tfrac{\h}{2},\ 1\,\bigr],
+\end{equation}
+i.e.\ one extra edge inserted into the first cell and one into the last. This has
+$n_t+3$ edges, hence
+\begin{equation}
+  n_t^{\mathrm{ref}} = n_t + 2 \quad \text{cells,} \qquad
+  \Delta t_i =
+  \begin{cases}
+    \h/2, & i \in \{0,1,\,n_t^{\mathrm{ref}}{-}2,\, n_t^{\mathrm{ref}}{-}1\}, \\
+    \h,   & \text{otherwise,}
+  \end{cases}
+\end{equation}
+and $\sum_i \Delta t_i = 2\cdot\tfrac{\h}{2} + (n_t-2)\h + 2\cdot\tfrac{\h}{2} = n_t \h = 1$,
+as required. Cell centers and $\dt_{\mathrm{ref}} := 1/n_t^{\mathrm{ref}}$ follow the usual
+construction from $\mathbf{t}$ (Eq.~\ref{eq:edges}); nothing else about the grid changes.
+This affects \emph{both} grids of Section~\ref{sec:two-grids} identically: the KE grid's
+$\tau_i$ are exactly the constraint grid's cell centers, so both move together, and only
+$\mu$ (not $\psi$) picks up any new time-interpolation behavior, per the remark above.
+
+\subsection{Worked example: $n_t = 6$}
+\label{sec:worked}
+
+Here $\h = 1/6$, $n_t^{\mathrm{ref}} = 8$.
+
+\begin{center}
+\begin{tabular}{c|cccccccc}
+\toprule
+$i$ (cell) & 0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 \\
+\midrule
+$\Delta t_i$ & $1/12$ & $1/12$ & $1/6$ & $1/6$ & $1/6$ & $1/6$ & $1/12$ & $1/12$ \\
+$\tau_i$ (center) & $1/24$ & $1/8$ & $1/4$ & $5/12$ & $7/12$ & $3/4$ & $7/8$ & $23/24$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{center}
+\begin{tabular}{c|ccccccccc}
+\toprule
+$j$ (edge) & 0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 \\
+\midrule
+$t_j$ & $0$ & $1/12$ & $1/6$ & $1/3$ & $1/2$ & $2/3$ & $5/6$ & $11/12$ & $1$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+$\mu$'s interior nodes are $t_1,\ldots,t_7$ (plus $\mu(t_0,\cdot)=\rho_0$,
+$\mu(t_8,\cdot)=\rho_1$); $\psi$ and the collocated $(\rho,m)$ all live at the $8$ cell
+centers $\tau_0,\ldots,\tau_7$ above. (Verified against \code{refine\_ends\_time\_grid(6)}
+numerically -- matches to machine precision.)
+
+%------------------------------------------------------------------------------
+\section{The discrete FP constraint on this grid}
+\label{sec:fp}
+%------------------------------------------------------------------------------
+
+The continuous constraint is $\partial_t\rho + \partial_x m = \eps\,\partial_x^2\rho$.
+Discretely, the residual is evaluated on the constraint grid but \emph{landed} at the
+KE grid's locations $(\tau_i,\xi_k)$ (where $\phi$, the projection's dual potential,
+also lives):
+\begin{equation}
+  \label{eq:residual}
+  f(\tau_i,\xi_k) =
+  \underbrace{\frac{\mu(t_{i+1},\xi_k)-\mu(t_i,\xi_k)}{\Delta t_i}}_{\partial_t\mu}
+  \;+\;
+  \underbrace{\frac{\psi(\tau_i,x_k)-\psi(\tau_i,x_{k-1})}{\dx}}_{\partial_x\psi}
+  \;-\;
+  \eps\,\underbrace{D_x^2\bigl[\bar I_t\mu\bigr](\tau_i,\xi_k)}_{\text{diffusion}},
+\end{equation}
+where $\bar I_t\mu(\tau_i,\xi_k) := \tfrac12[\mu(t_i,\xi_k)+\mu(t_{i+1},\xi_k)]$ is
+exactly the $\hat\rho$ map of \eqref{eq:consensus} (\code{interp\_t\_at\_phi}, reused
+verbatim), and $D_x^2$ is the standard $3$-point second difference in $x$
+(\code{deriv\_x\_at\_phi} $\circ$ \code{deriv\_x\_at\_m}, with the zero-Neumann ghost at
+$k=1,n_x$ -- entirely a space operator, untouched by any of this).
+
+\medskip
+\noindent\textbf{Every term in \eqref{eq:residual} is local to cell $i$ in time.} The
+$\partial_t\mu$ term only ever reads $\mu$ at $i$'s own two bounding edges, divided by
+$i$'s own width -- it never sees a neighboring cell's width, so there is nothing to
+special-case at a junction. The diffusion term first applies $\bar I_t$
+(Lemma~\ref{lem:midpoint}: exact at $\tau_i$ for \emph{any} $\Delta t_i$, independent of
+neighboring cells) and then a purely spatial, uniform-$\dx$ operator. The
+$\partial_x\psi$ term never touches time at all. \textbf{Consequence:} the discrete FP
+constraint~\eqref{eq:residual}, as literally defined by this codebase, has the
+\emph{same} local truncation order at every cell -- including both refined end-cells and
+their neighbors -- as it does on the uniform grid. Nothing degrades at the junction; the
+refinement changes the (local) resolution, not the (local) accuracy.
+
+\subsection{Worked instantiation, $n_t=6$}
+
+Using the edges from Section~\ref{sec:worked}, at the first junction ($i=0,1,2$):
+\begin{align}
+  f(\tau_0,\xi_k) &= \frac{\mu(\tfrac1{12},\xi_k)-\rho_0(\xi_k)}{1/12}
+    + \frac{\psi(\tau_0,x_k)-\psi(\tau_0,x_{k-1})}{\dx}
+    - \eps\, D_x^2\Bigl[\tfrac12\bigl(\rho_0+\mu(\tfrac1{12},\cdot)\bigr)\Bigr](\xi_k), \\
+  f(\tau_1,\xi_k) &= \frac{\mu(\tfrac16,\xi_k)-\mu(\tfrac1{12},\xi_k)}{1/12}
+    + (\cdots)/\dx
+    - \eps\, D_x^2\Bigl[\tfrac12\bigl(\mu(\tfrac1{12},\cdot)+\mu(\tfrac16,\cdot)\bigr)\Bigr](\xi_k), \\
+  f(\tau_2,\xi_k) &= \frac{\mu(\tfrac13,\xi_k)-\mu(\tfrac16,\xi_k)}{1/6}
+    + (\cdots)/\dx
+    - \eps\, D_x^2\Bigl[\tfrac12\bigl(\mu(\tfrac16,\cdot)+\mu(\tfrac13,\cdot)\bigr)\Bigr](\xi_k),
+\end{align}
+and mirrored at the last junction ($i=5,6,7$):
+\begin{align}
+  f(\tau_5,\xi_k) &= \frac{\mu(\tfrac56,\xi_k)-\mu(\tfrac23,\xi_k)}{1/6} + (\cdots), \\
+  f(\tau_6,\xi_k) &= \frac{\mu(\tfrac{11}{12},\xi_k)-\mu(\tfrac56,\xi_k)}{1/12} + (\cdots), \\
+  f(\tau_7,\xi_k) &= \frac{\rho_1(\xi_k)-\mu(\tfrac{11}{12},\xi_k)}{1/12} + (\cdots).
+\end{align}
+Only the denominator of the $\partial_t\mu$ term changes across each row (per the local
+$\Delta t_i$); every other piece of every row has exactly the same form it would on the
+uniform grid.
+
+%------------------------------------------------------------------------------
+\section{The projection: exact enforcement via the Euclidean adjoint}
+\label{sec:projection}
+%------------------------------------------------------------------------------
+
+The projection solves $f=0$ \emph{exactly} (up to linear-solve tolerance) by writing the
+correction in terms of a potential $\phi$ living at the same $(\tau_i,\xi_k)$ locations
+as $f$, and solving $R R^{*}\phi = f$ where $R$ is the linear residual map
+\eqref{eq:residual} and $R^{*}$ is \emph{its Euclidean (array-index) adjoint} -- not a
+physically/quadrature-weighted adjoint. This is a structural, algebraic fact, not an
+approximation: correcting $(\mu,\psi)\mapsto(\mu,\psi) + R^{*}\phi$ gives
+$R(\mu+R^*\phi\text{-part},\,\psi+R^*\phi\text{-part}) = f - RR^*\phi = 0$ \emph{exactly},
+for \emph{any} $\phi$ solving $RR^*\phi=f$, regardless of whether the individual pieces
+of $R^*$ are themselves accurate interpolants of anything physical. This is why grid
+non-uniformity can never break \emph{exactness} of the constraint enforcement: exactness
+only needs $R^*$ to literally be $R$'s Euclidean transpose, which is a property that is
+checked once and for all (\code{scripts/validate\_nu.py}'s adjoint-identity check,
+Section~\ref{sec:decisions}), not re-derived per grid.
+
+\subsection{\code{deriv\_t\_at\_rho}: the one place the width jump appears in a formula}
+
+$R^{*}$'s time-derivative piece, $\partial_t^{*}$, is the adjoint of $\partial_t\mu$'s
+$1/\Delta t_i$-weighted first difference:
+\begin{equation}
+  (\partial_t^{*}v)_j = \frac{v_{j+1}}{\Delta t_{j+1}} - \frac{v_j}{\Delta t_j}.
+\end{equation}
+At the fine/coarse junction $j=1$ (interior node between cell $1$, width $\h/2$, and cell
+$2$, width $\h$, in the worked example):
+\begin{equation}
+  (\partial_t^{*}v)_1 = \frac{v_2}{\h} - \frac{2v_1}{\h},
+\end{equation}
+a factor-of-$2$ asymmetry between the two terms coming purely from cell $1$ being half
+the width of cell $2$ -- each term rescaled by its \emph{own} cell's width, not by any
+shared center-to-center distance. Mirrored at $j=5$: $(\partial_t^{*}v)_5 = 2v_6/\h -
+v_5/\h$.
+
+\subsection{\code{interp\_t\_at\_rho}: an accuracy caveat (not a correctness one)}
+
+The other time-direction piece used inside the correction, \code{interp\_t\_at\_rho}
+(feeding $\nabla_x\phi$'s contribution back into $\rho_{\mathrm{out}}$), is the plain
+average $\tfrac12(v_i+v_{i+1})$ mapping cell-center data back to the edge $t_{i+1}$
+between them. Unlike Lemma~\ref{lem:midpoint} (which places the average \emph{at} the
+midpoint of the two sample points, exactly), this map estimates the value \emph{at}
+$t_{i+1}$ from samples at $\tau_i,\tau_{i+1}$ -- and $t_{i+1}$ is the midpoint of
+$[\tau_i,\tau_{i+1}]$ only when $\Delta t_i=\Delta t_{i+1}$ (locally uniform). A Taylor
+expansion gives
+\begin{equation}
+  \tfrac12\bigl[g(\tau_i)+g(\tau_{i+1})\bigr] - g(t_{i+1})
+  = \frac{\Delta t_{i+1}-\Delta t_i}{4}\,g'(t_{i+1}) + O(\dt^2),
+\end{equation}
+i.e.\ a first-order error proportional to the local width \emph{mismatch}, vanishing
+whenever neighboring cells share a width. At the $n_t=6$ junction ($j=1$: $\Delta
+t_1=\h/2\to\Delta t_2=\h$) this is $O(\h)$, localized to that one edge's estimate. This
+does \emph{not} affect whether the constraint $f=0$ is satisfied after projection
+(Section~\ref{sec:projection} above -- that's exact, algebraically) or the accuracy of
+the constraint itself (Section~\ref{sec:fp} -- \code{interp\_t\_at\_rho} never appears
+in $f$'s definition, only in the least-squares correction machinery); it is purely a
+statement that the \emph{internal} quantity $\nabla_x\phi$ used to build that
+correction is a slightly less accurate estimate right at the two junction edges. Since
+$\phi$ itself carries no independent physical meaning (it is a Lagrange multiplier, not
+part of the state), this has no observable consequence beyond a highly localized
+constant in the projection's own internal bookkeeping.
+
+%------------------------------------------------------------------------------
+\section{What does not need re-deriving}
+%------------------------------------------------------------------------------
+
+\begin{itemize}
+  \item \textbf{\code{projection\_nu.py}}'s per-mode tridiagonal operator ($M_0, M_1,
+        M_2$) is assembled \emph{numerically}, by probing \code{deriv\_t\_at\_rho} /
+        \code{interp\_t\_at\_rho} / etc.\ with unit vectors, not from a closed-form
+        formula. It automatically picks up whatever $\Delta t_i$ the grid has, including
+        the jumps above -- no new algebra needed.
+  \item \textbf{\code{prox\_nu.py}}'s $\sigma_{\mathrm{eff}} = \sigma\, \Delta t_i /
+        \dt_{\mathrm{ref}}$ weighting is already generic and diagonal in $i$ (the KE
+        prox is pointwise in $(\tau_i,\xi_k)$, so it never sees a neighboring row's
+        width at all). In the $n_t=6$ example, $\dt_{\mathrm{ref}} = 1/8$ (mean width of
+        the actual $8$-cell grid), so the fine end cells get $\sigma_{\mathrm{eff}} =
+        \sigma\cdot\tfrac{1/12}{1/8} = \tfrac23\sigma$ and the coarse middle cells get
+        $\sigma_{\mathrm{eff}} = \sigma\cdot\tfrac{1/6}{1/8} = \tfrac43\sigma$.
+  \item \textbf{\code{pipeline\_nu.py}}'s $\Delta t^{\mathrm{dual}}_j =
+        \tfrac12(\Delta t_j + \Delta t_{j+1})$ quadrature weight for the staggered-grid
+        norm is likewise generic; at the junction $\Delta t^{\mathrm{dual}}_1 =
+        \tfrac12(\h/2+\h) = \tfrac34\h$.
+\end{itemize}
+
+%------------------------------------------------------------------------------
+\section{Implementation}
+\label{sec:decisions}
+%------------------------------------------------------------------------------
+
+Added to \code{time\_grid.py}:
+\begin{lstlisting}[language=Python]
+def refine_ends_time_grid(nt: int) -> TimeGrid:
+    """Uniform nt-cell grid with cell 0 and cell nt-1 each split into two
+    equal halves. Returns a TimeGrid with nt+2 cells total."""
+    if nt < 2:
+        raise ValueError("nt must be >= 2 to refine both ends without overlap")
+    h = 1.0 / nt
+    base_edges = np.linspace(0.0, 1.0, nt + 1)
+    t_edges = np.concatenate([
+        [base_edges[0], base_edges[0] + 0.5 * h],
+        base_edges[1:-1],
+        [base_edges[-1] - 0.5 * h, base_edges[-1]],
+    ])
+    return _time_grid_from_edges(t_edges)
+\end{lstlisting}
+Verified against Table 1 by hand: \code{refine\_ends\_time\_grid(6)} reproduces the
+$t$/$\Delta t$/$\tau$ values above exactly.
+
+\subsection*{Decisions made on the open design questions}
+\begin{enumerate}
+  \item \textbf{$n_t$ is the base resolution}, so the returned grid has $n_t+2$ cells,
+        not $n_t$. This breaks the ``constructor returns exactly $n_t$ cells'' pattern
+        that \code{clustered\_time\_grid} has, but composes more cleanly ($n_t=6$
+        unambiguously means ``start from the $6$-cell uniform grid and refine its
+        ends''). $n_t < 2$ raises \code{ValueError} (the two end cells would coincide).
+  \item \textbf{Fixed single halving, no \code{levels}/\code{k} parameter yet} -- kept to
+        exactly what was asked (``start simple''). The name leaves room to add that
+        later without an API break.
+  \item \textbf{Validation added}: \code{scripts/validate\_nu.py}'s adjoint-identity
+        check and repeated-projection stability check both now also run against
+        \code{refine\_ends\_time\_grid(NT)}, alongside the existing uniform/clustered
+        cases. All checks pass ($5/5$). Not yet added: a dedicated
+        \code{sb\_gaussian\_nonuniform.py}-style run against the closed-form SB solution
+        on this specific grid.
+\end{enumerate}
+
+\end{document}

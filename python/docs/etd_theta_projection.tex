@@ -1,0 +1,590 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{listings}
+
+\geometry{margin=1.1in}
+
+\newtheorem{lemma}{Lemma}
+\newtheorem{fact}{Fact}
+
+\newcommand{\eps}{\varepsilon}
+\newcommand{\dt}{\Delta t}
+\newcommand{\dx}{\Delta x}
+\newcommand{\code}[1]{\texttt{#1}}
+
+% hyperref cannot typeset math or \code in PDF bookmarks; tell it what to use.
+\pdfstringdefDisableCommands{%
+  \def\theta{theta}\def\Theta{Theta}\def\alpha{alpha}\def\rho{rho}%
+  \def\eps{eps}\def\dt{dt}\def\dx{dx}\def\code#1{#1}%
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  columns=fullflexible,
+  keepspaces=true,
+  breaklines=true,
+  frame=single,
+}
+
+\title{ETD-$\theta$: Removing the $\eps$-Dependent Quadrature Bias\\ from the ETD
+Fokker--Planck Projection}
+\author{Optimal Transport / Schr\"odinger Bridge Project\\
+Implements \code{projection\_expsemi\_theta.py}; reference scheme is
+\code{projection\_expsemi.py}}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+The ETD projection in \code{projection\_expsemi.py} integrates the diffusion term
+\emph{exactly}, yet its accuracy still degrades as $\eps$ grows: measured on the FP
+solution error, its order falls from $2.00$ at $\eps=10^{-2}$ to $1.28$ at $\eps=10$,
+losing a factor $60$ in absolute accuracy. This note shows the cause is not the
+semigroup treatment but a \emph{source-term quadrature bias}: ETD1 samples $D_xm$ at
+the time midpoint, while the exponential weight it is integrated against has its
+centroid at $\theta(\alpha)>1/2$. Correcting the sample point --- by interpolating
+between the two $m$ rows the staggered grid already provides, with weight
+$\omega=\theta(\alpha)-1/2$ --- restores second order uniformly in $\eps$ with a
+constant flat across four decades, at the cost of one extra precomputed array. The
+correction preserves the tridiagonal-in-$t$ structure, so the existing batched Thomas
+sweep still applies, and it degenerates to ETD1 identically at $\omega=0$. Sections
+\ref{sec:lastrow} and \ref{sec:open} record two things that did \emph{not} go as
+expected: the final time row forces a specific extrapolation choice (a linear one
+destroys the band structure), and the end-to-end LADMM confirmation at large $\eps$ is
+currently inconclusive for reasons unrelated to the scheme.
+\end{abstract}
+
+\tableofcontents
+
+\section{Setup and notation}
+
+Throughout, the FP constraint is
+\begin{equation}
+  \partial_t\rho + \partial_x m = \eps\,\partial_{xx}\rho,
+  \label{eq:fp}
+\end{equation}
+discretised on the staggered grid of \code{operators.py}: $\rho$ at $(n_t-1)\times n_x$
+(time-interior nodes, space cell-centres), $m$ at $n_t\times(n_x-1)$ (time cell-centres,
+space-interior nodes), and the residual on the $\phi$ grid $n_t\times n_x$.
+
+Every scheme here is diagonal in the DCT-$x$ basis. Writing $\lambda_j$ for the discrete
+Neumann Laplacian eigenvalues of \code{grid.py},
+\begin{equation}
+  \lambda_j = \frac{2-2\cos(j\pi/n_x)}{\dx^2},
+  \qquad
+  \alpha_j := \eps\,\lambda_j\,\dt ,
+  \label{eq:alpha}
+\end{equation}
+and hatting DCT-$x$ coefficients, ETD1 reads, per mode $j$ and time row
+$k=0,\dots,n_t-1$,
+\begin{equation}
+  \frac{\hat\rho_{k+1} - c_j\hat\rho_k}{\dt} + \varphi_j\,\hat g_k = 0,
+  \qquad
+  c_j = e^{-\alpha_j},\quad
+  \varphi_j = \frac{1-c_j}{\alpha_j},
+  \label{eq:etd1}
+\end{equation}
+where $g := D_xm$ and $D_x$ is \code{deriv\_x\_at\_phi}. The boundary rows use
+$\hat\rho_0=\hat\rho_0^{\mathrm{BC}}$ and $\hat\rho_{n_t}=\hat\rho_1^{\mathrm{BC}}$.
+Note $\hat g_k$ is $m$ at the time \emph{midpoint} $t_{k+1/2}$, since that is where the
+staggered grid places $m$.
+
+\section{The error is a quadrature bias, not a semigroup error}
+
+The factor $c_j=e^{-\alpha_j}$ in \eqref{eq:etd1} is the \emph{exact} semigroup factor
+for the space-discrete problem, so the homogeneous part of ETD1 carries no error at any
+$\eps$. This is worth stating sharply because it is verifiable: feeding ETD1 the
+semi-discrete pure-diffusion solution
+$\rho(t,x_i)=1+a\cos(n\pi x_i)e^{-\eps\lambda_nt}$ with $m\equiv0$ produces a residual of
+$10^{-14}$ for every $\eps$ from $10^{-3}$ to $10$, whereas Crank--Nicolson on the same
+data produces $1.6\times10^{-9}$ up to $1.2\times10^{1}$ over that range.
+
+The error lives entirely in the source term. Integrating \eqref{eq:fp} exactly over one
+step gives
+\begin{equation}
+  \hat\rho_{k+1}
+  = c_j\hat\rho_k
+  - \int_{t_k}^{t_k+\dt} e^{-\eps\lambda_j(t_{k+1}-s)}\,\hat g(s)\,ds .
+  \label{eq:exactstep}
+\end{equation}
+ETD1 approximates the integral by $\dt\,\varphi_j\,\hat g(t_{k+1/2})$. The weight
+\emph{integral} is exact, since
+$\int_{t_k}^{t_{k+1}}e^{-\eps\lambda_j(t_{k+1}-s)}ds=\dt\varphi_j$. What is wrong is the
+sample point: the weight
+\begin{equation}
+  w(s) = e^{-\eps\lambda_j(t_{k+1}-s)}
+\end{equation}
+is not symmetric about the midpoint --- it increases monotonically towards
+$s=t_{k+1}$. Expanding $\hat g$ about the midpoint $t_m := t_{k+1/2}$,
+\begin{equation}
+  \int w(s)\bigl[\hat g(s)-\hat g(t_m)\bigr]ds
+  = \hat g'(t_m)\int w(s)(s-t_m)\,ds + O(\dt^3),
+\end{equation}
+and the first-order term survives precisely because $t_m$ is not the weight's centroid.
+
+\begin{fact}[the bias]
+With $\theta(\alpha)$ the $w$-weighted centroid of $[t_k,t_{k+1}]$ expressed as a
+fraction of $\dt$, the leading ETD1 error per step is
+\begin{equation}
+  \dt\,\varphi_j\cdot\dt\,\bigl(\theta(\alpha_j)-\tfrac12\bigr)\,\hat g'(t_m).
+  \label{eq:bias}
+\end{equation}
+It vanishes at $\eps=0$ (flat weight, centroid $=$ midpoint) and saturates as
+$\alpha\to\infty$. This is the $\eps$-dependent error constant.
+\end{fact}
+
+\section{The centroid weight $\theta(\alpha)$}
+\label{sec:theta}
+
+Substitute $u=(s-t_k)/\dt$, so $u\in[0,1]$ and $w(u)=e^{-\alpha(1-u)}$. The two moments
+are
+\begin{align}
+  \int_0^1 e^{-\alpha(1-u)}\,du       &= \frac{1-e^{-\alpha}}{\alpha}
+                                       =: \varphi(\alpha), \label{eq:phi}\\
+  \int_0^1 u\,e^{-\alpha(1-u)}\,du    &= \frac{(\alpha-1)+e^{-\alpha}}{\alpha^2}
+                                       =: \psi(\alpha), \label{eq:psi}
+\end{align}
+the second by parts. Their ratio is the centroid:
+\begin{equation}
+  \boxed{\;
+  \theta(\alpha) = \frac{\psi(\alpha)}{\varphi(\alpha)}
+                 = \frac{(\alpha-1)+e^{-\alpha}}{\alpha\bigl(1-e^{-\alpha}\bigr)}\;}
+  \label{eq:theta}
+\end{equation}
+
+\paragraph{Limits.} Expanding \eqref{eq:phi}--\eqref{eq:psi},
+$\psi = \tfrac12-\tfrac{\alpha}{6}+\tfrac{\alpha^2}{24}-\tfrac{\alpha^3}{120}+\cdots$
+and $1/\varphi = 1+\tfrac{\alpha}{2}+\tfrac{\alpha^2}{12}+0\cdot\alpha^3+\cdots$, so
+\begin{equation}
+  \theta(\alpha) = \frac12 + \frac{\alpha}{12} - \frac{\alpha^3}{720} + O(\alpha^5),
+  \label{eq:thetaseries}
+\end{equation}
+with the $\alpha^2$ and $\alpha^4$ terms vanishing. As $\alpha\to\infty$,
+$e^{-\alpha}\to0$ and $\theta\to(\alpha-1)/\alpha = 1-1/\alpha\to1$: the weight collapses
+onto the right endpoint. Hence $\theta\in[\tfrac12,1)$, monotone increasing, and the
+midpoint is correct only to $O(\alpha)$.
+
+\paragraph{The interpolation weight.} Define
+\begin{equation}
+  \omega(\alpha) := \theta(\alpha)-\tfrac12 \;\in\; [0,\tfrac12).
+  \label{eq:omega}
+\end{equation}
+The target sample point $t_k+\theta\dt$ lies in $[t_{k+1/2},t_{k+1}]$. The two nearest
+$m$ nodes are $t_{k+1/2}$ and $t_{k+3/2}$, and the target sits at fractional position
+$\theta+\tfrac12\in[1,1.5]$ between them --- always \emph{inside} that pair, never an
+extrapolation. Linear interpolation therefore gives
+\begin{equation}
+  \hat g(t_k+\theta\dt) \;\approx\; (1-\omega)\,\hat g_k + \omega\,\hat g_{k+1}.
+  \label{eq:interp}
+\end{equation}
+The first-order bias \eqref{eq:bias} is removed by construction; what remains is the
+$O(\dt^2)$ interpolation error times $\int w=\dt\varphi$, and since $\varphi\le1$ for
+all $\alpha$, the remaining constant is bounded uniformly in $\eps$.
+
+\begin{lemma}[relation to ETD2]
+\eqref{eq:interp} is ETD2's quadrature. ETD2 integrates the linear interpolant of $\hat
+g$ through two \emph{integer}-node values exactly against $w$, giving
+$\varphi\bigl[(1-\theta)\hat g(t_k)+\theta\hat g(t_{k+1})\bigr]$ with $\theta=\psi/\varphi$
+as in \eqref{eq:theta} --- the same rule, evaluated on a different grid.
+\end{lemma}
+
+The practical consequence is that the $n_t+1$ integer-node relayout assumed by the
+(unimplemented) \code{cfg\_ladmm\_gaussian\_expsemi\_etd2.m} is unnecessary: the
+half-integer nodes already carry enough information to achieve ETD2's order.
+
+\section{The scheme and its normal equations}
+
+ETD-$\theta$ replaces \eqref{eq:etd1} by
+\begin{equation}
+  \bigl[R(\rho,m)\bigr]_k
+  := \frac{\hat\rho_{k+1}-c_j\hat\rho_k}{\dt}
+   + \varphi_j\bigl[\Theta\hat g\bigr]_k = 0,
+  \label{eq:etdtheta}
+\end{equation}
+with $\Theta$ the time-only operator implementing \eqref{eq:interp}. Only the $m$ block
+changes; the $\rho$ block is bit-for-bit ETD1's.
+
+\subsection{$\Theta$ and its adjoint}
+
+As implemented (\code{\_apply\_theta}, \code{\_apply\_theta\_adj}), with $\omega$
+per-mode:
+\begin{equation}
+  [\Theta v]_k =
+  \begin{cases}
+    (1-\omega)v_k + \omega v_{k+1}, & 0\le k\le n_t-2,\\[2pt]
+    v_{n_t-1},                      & k=n_t-1,
+  \end{cases}
+  \label{eq:Theta}
+\end{equation}
+so as a matrix $\Theta$ is upper bidiagonal with diagonal
+$(1-\omega,\dots,1-\omega,1)$. Accumulating $[\Theta^*v]_l=\sum_k\Theta_{kl}v_k$ column
+by column,
+\begin{equation}
+  [\Theta^*v]_l =
+  \begin{cases}
+    (1-\omega)v_0,                        & l=0,\\[2pt]
+    (1-\omega)v_l + \omega v_{l-1},       & 1\le l\le n_t-2,\\[2pt]
+    v_{n_t-1} + \omega v_{n_t-2},         & l=n_t-1.
+  \end{cases}
+  \label{eq:ThetaStar}
+\end{equation}
+
+\subsection{The per-mode Gram matrix}
+
+Since $\Theta$ acts on time and $D_x$ on space, they commute, and $R_m=\varphi\Theta D_x$
+gives $R_mR_m^*=\varphi^2\Theta(D_xD_x^*)\Theta^*=\varphi^2\lambda\,\Theta\Theta^*$. With
+$R_\rho R_\rho^*$ unchanged from ETD1, the per-mode system is
+\begin{equation}
+  T_j = R_\rho R_\rho^* + \varphi_j^2\lambda_j\,\Theta\Theta^* .
+  \label{eq:gram}
+\end{equation}
+Both terms are tridiagonal, hence so is $T_j$. Writing $\Gamma:=\varphi_j^2\lambda_j$,
+the entries implemented in \code{precomp\_expsemi\_theta\_proj} are
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+row & main diagonal & off-diagonal (row $k$, $k{+}1$) \\
+\midrule
+$k=0$              & $1/\dt^2 + \Gamma[(1-\omega)^2+\omega^2]$
+                   & $-c/\dt^2 + \Gamma\,\omega(1-\omega)$ \\
+$1\le k\le n_t-3$  & $(1+c^2)/\dt^2 + \Gamma[(1-\omega)^2+\omega^2]$
+                   & $-c/\dt^2 + \Gamma\,\omega(1-\omega)$ \\
+$k=n_t-2$          & $(1+c^2)/\dt^2 + \Gamma[(1-\omega)^2+\omega^2]$
+                   & $-c/\dt^2 + \Gamma\,\omega$ \\
+$k=n_t-1$          & $c^2/\dt^2 + \Gamma$
+                   & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent
+The two irregular entries both come from $\Theta$'s final row being a lone $1$: its Gram
+diagonal is $1$ rather than $(1-\omega)^2+\omega^2$, and
+$(\Theta\Theta^*)_{n_t-2,n_t-1}=\omega$ rather than $\omega(1-\omega)$. Setting
+$\omega=0$ collapses the table to $\mathrm{diag}=(1+c^2)/\dt^2+\varphi^2\lambda$ with
+constant off-diagonal $-c/\dt^2$, which is exactly \code{precomp\_expsemi\_proj}: the
+degeneracy to ETD1 is structural, not approximate.
+
+Because the off-diagonal is row-varying in one place, the module uses
+\code{thomas\_batch\_precomp\_general} / \code{thomas\_batch\_solve\_general} from
+\code{projection\_nu.py} rather than \code{projection.py}'s constant-off-diagonal pair.
+These reduce to the constant version when \code{sub} is uniform, so nothing is lost.
+
+\subsection{The correction step}
+
+The projection is $x_{\mathrm{out}}=x_{\mathrm{in}}-R^*T^{-1}Rx_{\mathrm{in}}$. Since
+$R_\rho$ is untouched, the $\rho$ correction is ETD1's verbatim. For $m$,
+$R_m^*=D_x^*\Theta^*\varphi$, so $\Theta^*$ is applied in DCT space (where $\omega$ is
+diagonal) before the inverse transform:
+\begin{lstlisting}
+p_weighted = idct(_apply_theta_adj(phi_vals * p_hat, omega), axis=1)
+mx_out     = psi + ops.deriv_x_at_m(p_weighted)
+\end{lstlisting}
+The absent minus sign is correct: \code{deriv\_x\_at\_m} is the \emph{negated} adjoint of
+\code{deriv\_x\_at\_phi}, as a two-point difference must be, and ETD1 relies on the same
+cancellation.
+
+\paragraph{The DC mode.} At $j=0$, $\lambda_0=0$ so $\alpha_0=0$, giving $c=1$,
+$\varphi=1$, $\omega=0$, and the entire $m$ block drops out of \eqref{eq:gram}. $T_0$ is
+therefore ETD1's singular Neumann-in-$t$ Laplacian, handled by the same DCT-in-$t$ gauge
+fix, unchanged.
+
+\section{The final time row forces the extrapolation choice}
+\label{sec:lastrow}
+
+Row $k=n_t-1$ of \eqref{eq:interp} needs $\hat g_{n_t}$, which does not exist: $m$ has
+$n_t$ rows, the last at $t=1-\dt/2$. The obvious choice is linear extrapolation,
+$\hat g_{n_t}:=2\hat g_{n_t-1}-\hat g_{n_t-2}$, which keeps that row second-order
+consistent. \textbf{It must not be used.}
+
+With linear extrapolation, $\Theta$'s final row spans columns $\{n_t-2,n_t-1\}$. That row
+then overlaps row $n_t-3$, which spans $\{n_t-3,n_t-2\}$, producing
+\begin{equation}
+  (\Theta\Theta^*)_{n_t-3,\,n_t-1}
+  = \omega\cdot(-\omega) = -\omega^2 \neq 0 ,
+\end{equation}
+a distance-2 entry. $\Theta\Theta^*$ becomes bandwidth 2, \eqref{eq:gram} is no longer
+tridiagonal, and the Thomas sweep silently solves the wrong system. This was not caught
+by hand --- it was caught by check \#5 of \code{scripts/validate\_expsemi\_theta.py},
+which reported post-projection residual ratios of $3\times10^{-2}$ instead of
+$10^{-15}$, together with a $5\times10^{-3}$ idempotence drift.
+
+The argument generalises: \emph{any} two-point final row touching column $n_t-2$ overlaps
+row $n_t-3$. A tridiagonal $RR^*$ therefore requires the final row to touch column
+$n_t-1$ alone, i.e. constant extrapolation $\hat g_{n_t}:=\hat g_{n_t-1}$, which collapses
+that row to the plain midpoint sample --- \eqref{eq:Theta}.
+
+Two consolations. First, $\Theta$ is then upper triangular with
+$\det\Theta=(1-\omega)^{n_t-1}\neq0$ for $\omega<1$, so $\Theta\Theta^*$ is SPD by
+inspection, with no continuity argument needed. Second, the accuracy cost is nil:
+Table~\ref{tab:lastrow} compares the two rules and they agree to every printed digit. The
+reason is structural --- the final residual row determines $\hat\rho_{n_t}$, which is a
+prescribed boundary condition rather than an unknown.
+
+\begin{table}[htbp]
+\centering
+\caption{Last-row rule, relative $L^2$ FP solution error, rough $\sigma=0.05$ data,
+$n_t=n_x=n$. ``const'' is what ships; ``linear'' is the bandwidth-2 variant.}
+\label{tab:lastrow}
+\begin{tabular}{@{}llrrrrr@{}}
+\toprule
+$\eps$ & rule & $n{=}32$ & $n{=}64$ & $n{=}128$ & $n{=}256$ & $n{=}512$ \\
+\midrule
+$0.1$ & midpoint (ETD1) & 1.818e-2 & 4.755e-3 & 1.212e-3 & 3.046e-4 & 7.624e-5 \\
+      & const           & 1.098e-2 & 2.780e-3 & 7.074e-4 & 1.789e-4 & 4.499e-5 \\
+      & linear          & 1.098e-2 & 2.780e-3 & 7.074e-4 & 1.789e-4 & 4.499e-5 \\
+\midrule
+$1$   & midpoint (ETD1) & 4.399e-2 & 1.661e-2 & 5.789e-3 & 1.811e-3 & 5.100e-4 \\
+      & const           & 9.580e-3 & 2.403e-3 & 6.262e-4 & 1.652e-4 & 4.327e-5 \\
+      & linear          & 9.580e-3 & 2.403e-3 & 6.262e-4 & 1.652e-4 & 4.327e-5 \\
+\midrule
+$10$  & midpoint (ETD1) & 6.512e-2 & 2.967e-2 & 1.320e-2 & 5.614e-3 & 2.234e-3 \\
+      & const           & 9.531e-3 & 2.318e-3 & 5.752e-4 & 1.444e-4 & 3.687e-5 \\
+      & linear          & 9.531e-3 & 2.318e-3 & 5.752e-4 & 1.444e-4 & 3.687e-5 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Evaluating $\theta$ in floating point}
+
+The direct form \eqref{eq:theta} is catastrophically cancelling at small $\alpha$: its
+numerator $(\alpha-1)+e^{-\alpha}\sim\alpha^2/2$ is a difference of $O(1)$ quantities.
+The damage is invisible in $\theta$ and severe in $\omega$, because $\theta\approx1/2$
+dominates its own relative error while $\omega=\theta-1/2$ does not. At $\alpha=10^{-4}$
+the direct form is already wrong in the fourth significant digit of $\omega$ (relative
+error $1.5\times10^{-4}$) while $\theta$ still looks accurate to $10^{-12}$.
+
+Both branches were compared against adaptive quadrature of
+\eqref{eq:phi}--\eqref{eq:psi} over $\alpha\in[10^{-6},3]$. They cross near
+$\alpha=0.02$, where each holds about $10^{-10}$ relative error on $\omega$; the module
+switches there, using the two-term series \eqref{eq:thetaseries} below and the direct
+form above. For large $\alpha$, $e^{-\alpha}$ underflows harmlessly and \eqref{eq:theta}
+is well conditioned.
+
+The lesson generalises to the validation: \textbf{check the error on $\omega$, not on
+$\theta$}. The first version of check \#1 measured $\theta$ and passed a cutoff that was
+two orders of magnitude too low.
+
+\section{Files}
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+file & status & what \\
+\midrule
+\code{optimal\_transport/projection\_expsemi\_theta.py} & new
+  & the scheme: $\theta,\omega$, $\Theta,\Theta^*$, precomp, projection \\
+\code{scripts/validate\_expsemi\_theta.py} & new
+  & the six checks of \S\ref{sec:validation} \\
+\code{scripts/compare\_etd1\_vs\_theta.py} & new
+  & end-to-end LADMM comparison (\S\ref{sec:open}) \\
+\code{scripts/study\_utils.py} & edited
+  & \code{run\_study} gained \code{precomp}/\code{projection} arguments \\
+\code{optimal\_transport/projection\_expsemi.py} & \textbf{untouched}
+  & remains the ETD1 reference \\
+\code{optimal\_transport/projection.py} & \textbf{untouched}
+  & remains the CN reference \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The \code{run\_study} change defaults to the ETD1 pair, so every existing caller
+(\code{grid\_convergence.py}, \code{multi\_eps\_study.py}, \dots) is unaffected. The new
+scheme plugs into the \code{projection}/\code{projection\_state} seam that
+\code{discretize\_then\_optimize} already exposed, so \code{pipeline.py} needed no change
+at all.
+
+\section{Validation}
+\label{sec:validation}
+
+\code{scripts/validate\_expsemi\_theta.py} runs six checks over
+$\eps\in\{0,10^{-8},10^{-3},0.1,1,10,10^3\}$ at $n_t=32$, $n_x=24$. Nothing trusts the
+hand algebra of \S\ref{sec:theta}--\S\ref{sec:lastrow}: each piece is checked against an
+independently constructed reference.
+
+\begin{enumerate}
+  \item $\theta,\omega$ in range and monotone; $\omega$ matches adaptive quadrature of
+        \eqref{eq:phi}--\eqref{eq:psi} to $<10^{-9}$ relative; the $\alpha\to\infty$
+        asymptote $\theta\sim1-1/\alpha$ holds to $O(\alpha^{-2})$.
+  \item $\langle\Theta g,v\rangle=\langle g,\Theta^*v\rangle$ to $2.7\times10^{-15}$, and
+        \code{\_apply\_theta} agrees with a densely built $\Theta$ to
+        $4.4\times10^{-16}$, for $\omega\in\{0,10^{-6},0.05,0.2,0.4999\}$.
+  \item The closed-form $(\mathrm{main},\mathrm{sub})$ of \eqref{eq:gram} matches a dense
+        $R_\rho R_\rho^*+\varphi^2\lambda\,\Theta\Theta^*$ built per mode to
+        $3.4\times10^{-18}$ relative; every per-mode $T_j$ is verified tridiagonal and
+        SPD (worst $\lambda_{\min}/\lambda_{\max}=4.4\times10^{-10}$ over all modes and
+        all $\eps$).
+  \item At $\eps=0$, ETD-$\theta$ reproduces \code{proj\_fokker\_planck\_expsemi}
+        \emph{exactly} (max relative difference $0$).
+  \item \textbf{Feasibility.} The ETD-$\theta$ residual of the projected point, recomputed
+        with a dense $\Theta$ rather than the module's own helper, drops from
+        $O(10^3)$ to $O(10^{-12})$ --- worst after/before ratio $8.2\times10^{-15}$
+        across the whole $\eps$ sweep. This is the decisive check: a projection built on
+        a $T$ that is not the true Gram $RR^*$ cannot land on the constraint set, so
+        \#5 would fail if \emph{any} of \eqref{eq:Theta}, \eqref{eq:ThetaStar} or
+        \eqref{eq:gram} were wrong. It is what caught the bandwidth-2 error of
+        \S\ref{sec:lastrow}.
+  \item Idempotence: $P(P(x))=P(x)$ to $0$ (exactly).
+\end{enumerate}
+
+\section{Measured effect}
+
+The scheme-level measurement marches each scheme forward in time from $\rho(0)$ using the
+exact source $g=D_xm$ and compares against the exact solution --- no ADMM, no projection,
+so what is measured is purely FP discretisation error. Data is a manufactured solution
+with a Gaussian-decaying spectrum at the project's own $\sigma=0.05$, which has genuine
+high-frequency content (31 $x$-modes in 1D, $11\times11$ in 2D).
+
+Solution error, not residual norm, is the right measure here: for a stiff mode the
+residual carries a factor $1/\dt$ that the inverse operator removes, so a residual-fitted
+order understates every scheme and does so unevenly.
+
+\begin{table}[htbp]
+\centering
+\caption{Relative $L^2$ FP solution error at the finest grid, with fitted order $p$.
+1D: $n_t=n_x=512$. 2D: $n_t=n_x=n_y=96$, built with the project's own
+\code{operators\_2d}/\code{grid\_2d}.}
+\label{tab:main}
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+& \multicolumn{2}{c}{CN} & \multicolumn{2}{c}{ETD1}
+& \multicolumn{2}{c}{ETD-$\theta$} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+$\eps$ & error & $p$ & error & $p$ & error & $p$ \\
+\midrule
+\multicolumn{7}{@{}l}{\emph{1D}}\\
+$0.01$ & 4.402e-5 & 2.00 & 4.609e-5 & 2.00 & \textbf{4.163e-5} & 2.00 \\
+$0.1$  & 5.093e-5 & 2.00 & 7.624e-5 & 2.00 & \textbf{4.499e-5} & 1.99 \\
+$1$    & 5.279e-5 & 2.00 & 5.100e-4 & 1.75 & \textbf{4.327e-5} & 1.93 \\
+$10$   & 5.312e-5 & 2.02 & 2.234e-3 & 1.28 & \textbf{3.687e-5} & 1.98 \\
+\midrule
+\multicolumn{7}{@{}l}{\emph{2D}}\\
+$0.01$ & 1.641e-3 & 2.01 & 1.730e-3 & 2.01 & \textbf{1.512e-3} & 2.01 \\
+$0.1$  & 2.011e-3 & 2.03 & 3.310e-3 & 1.93 & \textbf{1.695e-3} & 1.96 \\
+$1$    & 2.066e-3 & 2.06 & 1.491e-2 & 1.35 & \textbf{1.428e-3} & 1.98 \\
+$10$   & 2.167e-3 & 2.19 & 2.563e-2 & 1.08 & \textbf{1.358e-3} & 2.02 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Three readings of Table~\ref{tab:main}.
+
+\begin{enumerate}
+  \item \textbf{ETD-$\theta$ holds $p\approx2$ at every $\eps$ with a constant flat in
+        $\eps$} (1D: 4.2, 4.5, 4.3, $3.7\times10^{-5}$ across four decades). It is the
+        best scheme at every $\eps$ tested and never worse anywhere. Against ETD1 it
+        gains a factor $60$ at $\eps=10$ and $12$ at $\eps=1$ in 1D, $19$ and $10$ in 2D.
+  \item \textbf{ETD1 degrades exactly as \eqref{eq:bias} predicts}, $p$ falling
+        $2.00\to1.75\to1.28$.
+  \item \textbf{CN's accuracy is not the problem.} Its order and constant are both stable
+        in $\eps$. CN's defect is elsewhere --- $R_{\mathrm{CN}}(\infty)=-1$, so at
+        $\eps=10$ with $\sigma=0.05$ data $99.2\%$ of modes have $R<0$ and one step
+        returns $\min\rho=-3.61$ where the exact solution has $\min\rho=+0.50$. That is
+        a positivity failure, not an accuracy failure, and ETD-$\theta$ inherits ETD1's
+        exact semigroup so it does not share it.
+\end{enumerate}
+
+\paragraph{Higher dimensions.} The correction is purely temporal, and time is
+one-dimensional in every spatial dimension: with
+$\alpha=\eps(\lambda_x+\lambda_y)\dt$ still a scalar per mode, $\theta,\omega,\Theta$ are
+the identical scalar functions evaluated on an $(n_x,n_y)$ array, and the two-row $m$
+stencil keeps $RR^*$ tridiagonal in $t$. It also matters \emph{more} as dimension grows:
+the fraction of modes with $\alpha>2$ at $n=64$, $\eps=0.01$ is $30\%$ in 1D, $66\%$ in
+2D, $87\%$ in 3D, since $\alpha_{\max}=4d\eps n$ is linear in $d$ and $\lambda$ is a sum.
+
+\section{Open items}
+\label{sec:open}
+
+\paragraph{On the actual Gaussian SB problem the gain is a few percent, not
+$12$--$60\times$.} This is the central caveat and it qualifies
+Table~\ref{tab:main}. Plugging the \emph{reference} SB solution into each
+scheme's discrete FP residual --- which, since the reference solves the
+continuous equation, measures that scheme's truncation error on the real
+problem --- gives:
+
+\begin{center}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+$\eps$ & $n$ & $\|R_{\mathrm{ETD1}}\|$ & $\|R_{\mathrm{ETD}\text{-}\theta}\|$ & gain \\
+\midrule
+$0.001$ & 128 & 1.898e-2 & 1.887e-2 & $1.01\times$ \\
+$0.01$  & 128 & 3.622e-2 & 3.550e-2 & $1.02\times$ \\
+$0.1$   & 128 & 6.481e-1 & 6.129e-1 & $1.06\times$ \\
+$1$     & 128 & 1.001e1  & 1.002e1  & $1.00\times$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The reason is structural, and it is the honest limit of this work.
+ETD1 loses \emph{order} only when the solution carries significant content in
+modes with $\alpha=\eps\lambda\dt\gtrsim1$; for modes it resolves, ETD1 and
+ETD-$\theta$ are both second order and differ by a bounded constant. The
+manufactured solutions of Table~\ref{tab:main} were built with a
+$\sigma=0.05$ spectrum across 31 $x$-modes \emph{and} a momentum field
+$m\propto\eps k^2g$, so their $D_xm$ is large and fast-varying exactly in the
+stiff modes the correction targets. The Gaussian SB solution is not like
+that: it is smooth, and at large $\eps$ it becomes \emph{smoother} (more
+nearly uniform), so it has almost no content where $\alpha\gtrsim1$.
+
+\textbf{So ETD-$\theta$ removes a real, correctly identified $\eps$-dependent
+error term, but that term is not the dominant one for this problem.} The
+original question --- why the error grows with $\eps$ here --- remains open.
+Note in particular that at $\eps=0.1$ the fitted order degrades to $\approx1$
+for \emph{both} schemes equally, which rules the quadrature bias out as the
+cause and points at a separate $\eps$-dependent term not yet identified
+(candidates: the spatial treatment of $\eps\partial_{xx}$, or the reference's
+own boundary mismatch).
+
+\paragraph{The reference is degenerate at large $\eps$.} At $\eps=1$ the
+residual above does not decrease under refinement at all ($8.79\to9.97\to
+10.01$ for $n=32,64,128$): the reference does not satisfy the discrete FP
+equation, so nothing measured against it at that $\eps$ means anything.
+\code{sinkhorn\_fit} applies the heat semigroup over the \emph{whole}
+interval $T=1$, and $e^{-\eps\pi^2}=5.2\times10^{-5}$ at $\eps=1$ annihilates
+every non-constant mode, so the iteration reaches a trivial fixed point in 2
+iterations. This is adjacent to the known
+\code{SINKHORN\_VAREPS\_THRESHOLD} issue and needs fixing before any
+large-$\eps$ claim, for any scheme, can be made.
+
+\paragraph{The end-to-end LADMM comparison is correspondingly uninformative.}
+\code{scripts/compare\_etd1\_vs\_theta.py} shows ETD-$\theta$ ahead by
+$1.01$--$1.08\times$, consistent with the residual table above, with absolute
+errors of $O(1)$--$O(10)$ at $\eps\ge1$ against the degenerate reference. At
+$\eps=0.1$, where the reference is most trustworthy, the gain does grow
+monotonically with resolution ($1.03\to1.05\to1.08$) --- the right direction,
+but a weak signal.
+
+\paragraph{Where ETD-$\theta$ should pay off.} A problem retaining genuine
+fine structure at large $\eps$ --- bimodal or rough marginals, cf.\
+\code{matlab/discretize\_first/2d/experiments/test\_expsemi\_bimodal.m} ---
+puts solution content where $\alpha\gtrsim1$ and is the natural test. This has
+not been run.
+
+\paragraph{Also not done.}
+\begin{itemize}
+  \item The \code{\_nu} (non-uniform time grid) variant. It matters more there, since
+        grading shrinks $\dt$ and raises the local $\alpha$. \code{projection\_expsemi\_nu.py}
+        builds its system by numerical probing rather than hand algebra, so the
+        correction should be absorbed with no new derivation.
+  \item The 2D/3D port. Python 2D currently has only the banded/CN projection, so this
+        means porting ETD anyway; it should be ported directly as ETD-$\theta$, with
+        \code{matlab/shared/2d/projection/proj\_fokker\_planck\_expsemi.m} as the
+        structural reference. One caution: do not materialise the lookahead
+        $\hat g_{k+1}$ as a full $(n_t,n_x,n_y)$ array --- fuse it into the existing
+        $t$-sweep.
+  \item An adjoint check of the full $R$/$R^*$ pair against the LADMM's own norms. Checks
+        \#2 and \#5 cover $\Theta$ and the Gram, but the assembled operator is only
+        checked implicitly through feasibility.
+\end{itemize}
+
+\paragraph{Worth an independent look.} Equations \eqref{eq:psi} (integration by parts),
+\eqref{eq:thetaseries} (the vanishing $\alpha^2$ term, which is what makes the two-term
+series worth using), \eqref{eq:ThetaStar} (the adjoint's boundary rows), and the
+$k=n_t-2$ off-diagonal $\Gamma\omega$ in the table of \S4.2.
+
+\end{document}

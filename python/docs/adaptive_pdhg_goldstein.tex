@@ -1,0 +1,573 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+
+\geometry{margin=1.1in}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\prox}{\operatorname{prox}}
+
+\title{My LADMM, Reordered, Is Adaptive PDHG}
+\author{Optimal Transport / Schr\"odinger Bridge Project\\
+Companion to \code{nonuniform\_grid\_xy\_variables.tex}, \code{nonuniform\_grid\_norms.tex}}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Written from the top, result first rather than reconstructed at the end.
+\code{ladmm.py}'s iteration, \emph{reordered to begin at its second step} -- the
+$y$-update rather than the $x$-update -- is exactly Goldstein--Li--Yuan's PDHG
+(their PDHG step, eqs (2)--(5)), in their own ordering, term for term and index for index, for
+\emph{any} step-size sequence $\gamma_k,\tau_k$, adaptive or not. Nothing is
+linearized differently, no variable is added, no step is lagged; only the point
+at which one iteration is declared to end moves. Consequently their adaptive
+step-size rule (their Algorithm 1) transfers verbatim, together with its convergence
+proof, and their stability condition turns out to be the $\tau>\gamma\|A\|^2$
+this project already imposes. Part I states the reordered scheme, Part II derives the
+saddle point it is run on and states their Algorithms 1 and 2 there, Part III
+matches the two line by line, Part IV collects the checks, Part V writes out the
+resulting adaptive LADMM in full, and Part VI asks what the adaptive-LADMM
+literature actually runs (answer: the other cut, which is a genuinely different
+algorithm once the step size moves).
+\end{abstract}
+
+\section*{Part I -- my LADMM, reordered to start at the $y$-update}
+Iterates $x^k,y^k,\delta^k$; scalars $\gamma_k>0$ (penalty) and $\tau_k>0$
+(proximal step), iteration-dependent from the start since the whole point is to
+let them adapt; linear/affine map $A$ (boundary conditions baked in), constant
+$d$, adjoint $A^\top$ (the \emph{linear part only} -- no constant); convex
+$f_1,f_2$. The constraint is $Ax-y-d=0$, i.e.\ \code{ladmm.py}'s
+$Ax+By-b$ at $B=-I$, $b=d$.
+
+One cycle, $k\to k+1$, carrying $(x^k,\delta^k)$ in and $(x^{k+1},\delta^{k+1})$
+out, with the \emph{same} $\gamma_k,\tau_k$ on every line:
+\begin{align}
+y^{k+1} &:= \prox_{f_2/\gamma_k}\big(Ax^{k}-\delta^{k}/\gamma_k\big) \label{eq:y}\\
+r^{k} &:= Ax^{k}-y^{k+1}-d \label{eq:r}\\
+\delta^{k+1} &:= \delta^{k}-\gamma_k r^{k} \label{eq:delta}\\
+x^{k+1} &:= \prox_{(1/\tau_k)f_1}\Big(x^{k}-\tfrac1{\tau_k}A^\top\big(\gamma_k r^{k}-\delta^{k+1}\big)\Big) \label{eq:x}
+\end{align}
+where $\prox_{th}(z):=\arg\min_p h(p)+\tfrac1{2t}\|p-z\|^2$.
+
+\paragraph{This is the same scheme, cut in a different place.}
+\code{ladmm.py} runs the cycle $(r,x,y,\delta)$: it computes its residual from the
+\emph{stored} $y$, updates $x$, then updates $y$ and $\delta$. Above, the cycle is
+$(y,r,\delta,x)$ -- the same four operations, in the same order along the same
+tape of updates, with the boundary between iterations moved from after the
+$\delta$-update to after the $x$-update. Unrolled, both groupings read off the one
+sequence
+\[
+\cdots\ \big|\ y^{k+1},\ \delta^{k+1}\ \big|\ x^{k+1}\ \big|\ y^{k+2},\ \delta^{k+2}\ \big|\ x^{k+2}\ \big|\ \cdots
+\]
+and differ only in where the bars go. What the choice of cut buys is stated in
+Part III; the short version is that this cut puts the $\delta$-update and the
+$x$-update that consumes $\gamma_kr^k$ inside the \emph{same} cycle, so both refer
+to the same $\gamma_k$ by construction and no ratio of consecutive penalties can
+appear.
+
+\paragraph{The residual carries mixed indices, necessarily.}
+\eqref{eq:r} is $r^k=Ax^k-y^{k+1}-d$, not $Ax^k-y^k-d$: starting the cycle at the
+$y$-update means the $y$ that $r^k$ measures against is the one \emph{this} cycle
+has just produced, while the $x$ is still the incoming one. Both indices are
+correct as written -- $r^k$ is a genuine constraint residual, just not at a single
+index. (Its single-index cousin $D^{k+1}:=Ax^{k+1}-y^{k+1}-d$, \code{ladmm.py}'s
+own constraint violation, reappears on its own in Part III.)
+
+\paragraph{Boundary convention, spelled out rather than left implicit.}
+A cycle of \eqref{eq:y}--\eqref{eq:x} needs only $(x^0,\delta^0)$ and
+manufactures its own $y^1$ from them in \eqref{eq:y}. With $\delta^0:=0$
+(\code{ladmm.py}'s own initialization) that is the entire starting state: no $y^0$
+is required anywhere -- one fewer arbitrary initial value than the unrotated cut,
+whose given $y^0$ is consumed by its very first $x$-update and never re-derived.
+
+\paragraph{Where the constant $d$ has to live.}
+Worth flagging, because it is the one place the reordering is not indifferent to
+notation. \eqref{eq:y} evaluates $\prox_{f_2/\gamma_k}$ at $Ax^k-\delta^k/\gamma_k$
+while \eqref{eq:r} subtracts $d$; if $d$ is carried loose in the residual like
+that and \emph{not} inside the map the $y$-update sees, then Part III's dual
+collapse acquires a stray $+\gamma_kd$ and the correspondence fails by exactly
+that much (checked numerically -- the error is $\gamma_k d$ on the nose). The fix
+is to read $A$ throughout \eqref{eq:y}--\eqref{eq:x} as the affine map with $d$
+folded in, $Ax\mapsto Ax-d$, which is precisely what \code{ladmm.py}'s
+\code{A\_fn} already is: affine, boundary data baked in, and called with $b=0$ in
+every run of this project, so $d$ never appears loose and the point is moot in
+practice. $A^\top$ (\code{At\_fn}) stays the linear part with no constant -- the
+same asymmetry \code{pdhg.py}'s docstring warns about, and the reason differences
+of $A$ must be formed by evaluating it twice rather than once on a difference.
+Everything below is written for $A$ affine in this sense.
+
+\paragraph{Two simplifications, both flagged.}
+First, $\prox_{(1/\tau_k)f_1}$ genuinely depends on $\tau_k$ in general -- this is
+the standard proximal-gradient step, step $1/\tau_k$ on both the gradient move and
+the prox -- and everything below is written to hold in that generality. In
+\emph{this} project's problem $f_1$ is the FP-feasibility indicator, so
+$\prox_{(1/\tau_k)f_1}$ collapses to the plain projection for any $\tau_k$;
+nothing below relies on that coincidence. Second, \code{ladmm.py} carries an
+over-relaxation parameter $\alpha$ (replacing $Ax^{k}$ by
+$\alpha Ax^{k}+(1-\alpha)(d+y^{k})$ in \eqref{eq:y}--\eqref{eq:delta}); every run
+in this project uses $\alpha=1$, which is the substitution already made above, so
+\eqref{eq:y}--\eqref{eq:x} is the iteration actually being run.
+
+
+\section*{Part II -- Goldstein--Li--Yuan's PDHG, on this problem's saddle point}
+Their scheme, in their own layout, but instantiated on the saddle point it will
+turn out to be run on rather than left abstract. Symbol discipline as before: no
+letter is reused from Part~I. $A$, $f_1$, $f_2$ are reused deliberately -- they
+\emph{are} Part~I's, not analogues -- and everything else gets a fresh letter.
+
+\subsection*{Which saddle point}
+Part I's constrained form $\min f_1(x)+f_2(y)$ s.t.\ $Ax-y-d=0$ is, with $d$
+folded into $A$ (Part I),
+\[
+\min_{x}\ f_1(x)+f_2(Ax).
+\]
+Its Fenchel dual, by the standard formula ($\min f(\cdot)+g(K\cdot)$ has dual
+$\min f^*(-K^\top\cdot)+g^*(\cdot)$), is $\min_v f_2^*(v)+f_1^*(-A^\top v)$.
+Legendre-transform \emph{that} problem's composed piece, using $(f_1^*)^*=f_1$, so
+$f_1^*(-A^\top v)=\max_u\langle -A^\top v,u\rangle-f_1(u)$:
+\begin{equation}
+\min_{v}\max_{u}\ f_2^*(v)+\langle Kv,\,u\rangle-f_1(u),
+\qquad K:=-A^\top. \label{eq:saddle}
+\end{equation}
+Set against Goldstein--Li--Yuan's own template
+$\min\max\ F(\cdot)+\langle K\cdot,\cdot\rangle-G(\cdot)$, this fixes
+\[
+\boxed{F=f_2^*,\qquad G=f_1,\qquad K=-A^\top}
+\]
+Worth naming the reversal explicitly, since it inverts the obvious guess. Read
+the \emph{primal} problem in the usual Chambolle--Pock way, $\min f(\cdot)+g(K\cdot)$
+with $f=f_1$ and $g=f_2$, and one expects $F=f$, $G=g^*$. Here it is the other way
+round: $F=g^*=f_2^*$ and $G=f=f_1$, with the operator $-A^\top$ rather than $A$.
+So the function on the variable that updates \emph{first} is the conjugate of
+Part I's $f_2$, and the one on the variable that updates \emph{second} is Part I's
+$f_1$ untouched. Part III shows which of Part I's iterates each of $v,u$ is; the
+answer is likewise the reverse of the obvious guess.
+
+\subsection*{Renaming table}
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Their symbol & What it is & Written here as\\
+\midrule
+$x$ (iterate updated first) & clashes with Part I's $x$ & $v$\\
+$y$ (iterate updated second) & clashes with Part I's $y$ & $u$\\
+$f$ (function on the first) & $=F=g^*=f_2^*$ & $f_2^*$\\
+$g$ (function on the second) & $=G=f=f_1$ & $f_1$\\
+$A$ (coupling operator) & $=-A^\top$, \emph{not} Part I's $A$ & $K$\\
+$\tau_k$ (step in the first update) & clashes with Part I's $\tau$ & $\theta_k$\\
+$\sigma_k$ (step in the second update) & no clash & $\sigma_k$\\
+$\alpha_k$ (adaptivity level) & clashes with Part I's $\alpha$ & $\omega_k$\\
+$p_k$ (primal residual) & no clash & $p_k$\\
+$d_k$ (dual residual) & clashes with Part I's constant $d$ & $q_k$\\
+$\rho(\cdot)$ (spectral radius) & clashes with $\rho_k$, Part VI & $\lambda_{\max}(\cdot)$\\
+$\eta$ (adaptivity decay) & no clash & unchanged\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{The PDHG step (their (2)--(5))}
+Their five lines, verbatim in structure, on \eqref{eq:saddle}. Steps
+$\theta_k,\sigma_k>0$; the right-hand column substitutes $K=-A^\top$ (so
+$K^\top=-A$) to show the same line in Part I's own operator:
+\begin{align}
+\hat v^{k+1} &= v^k-\theta_k K^\top u^k &&= v^k+\theta_k A u^k \label{eq:a1-1hat}\\
+v^{k+1} &= \arg\min_{v}\ f_2^*(v)+\tfrac1{2\theta_k}\|v-\hat v^{k+1}\|^2
+        &&= \prox_{\theta_kf_2^*}\big(\hat v^{k+1}\big) \label{eq:a1-1}\\
+\bar v^{k+1} &= v^{k+1}+\big(v^{k+1}-v^k\big) &&= 2v^{k+1}-v^k \label{eq:a1-bar}\\
+\hat u^{k+1} &= u^k+\sigma_k K\bar v^{k+1} &&= u^k-\sigma_k A^\top\bar v^{k+1} \label{eq:a1-2hat}\\
+u^{k+1} &= \arg\min_{u}\ f_1(u)+\tfrac1{2\sigma_k}\|u-\hat u^{k+1}\|^2
+        &&= \prox_{\sigma_kf_1}\big(\hat u^{k+1}\big) \label{eq:a1-2}
+\end{align}
+Collapsing the intermediates, the two lines that matter are
+\begin{align}
+v^{k+1} &= \prox_{\theta_kf_2^*}\big(v^k+\theta_kAu^k\big) \label{eq:a1-1s}\\
+u^{k+1} &= \prox_{\sigma_kf_1}\big(u^k-\sigma_kA^\top(2v^{k+1}-v^k)\big) \label{eq:a1-2s}
+\end{align}
+The ordering is the whole point and is worth stating in words: $v$ updates first
+from the \emph{stored} $u$ and takes no extrapolation; $u$ updates second from the
+\emph{freshly computed and extrapolated} $v$. The extrapolation coefficients are
+the literal, fixed $(2,-1)$ -- \eqref{eq:a1-bar} is their own
+$\bar v^{k+1}=v^{k+1}+(v^{k+1}-v^k)$, not a generalization of it.
+
+\subsection*{The adaptive rule (their Algorithm 1, residual balancing)}
+After each PDHG step, form the two residuals (again with $K=-A^\top$
+substituted on the right):
+\begin{align}
+p_{k+1} &= \Big|\tfrac1{\theta_k}\big(v^k-v^{k+1}\big)-K^\top\big(u^k-u^{k+1}\big)\Big|
+ &&= \Big|\tfrac1{\theta_k}\big(v^k-v^{k+1}\big)+A\big(u^k-u^{k+1}\big)\Big| \label{eq:p}\\
+q_{k+1} &= \Big|\tfrac1{\sigma_k}\big(u^k-u^{k+1}\big)-K\big(v^k-v^{k+1}\big)\Big|
+ &&= \Big|\tfrac1{\sigma_k}\big(u^k-u^{k+1}\big)+A^\top\big(v^k-v^{k+1}\big)\Big| \label{eq:q}
+\end{align}
+then adapt, with adaptivity level $\omega_k$ and their hard-coded imbalance
+factor $2$:
+\[
+p_{k+1}>2\,q_{k+1}\ \Rightarrow\
+\theta_{k+1}=\tfrac{\theta_k}{1-\omega_k},\quad \sigma_{k+1}=\sigma_k(1-\omega_k),\quad \omega_{k+1}=\eta\,\omega_k;
+\]
+\[
+2\,p_{k+1}<q_{k+1}\ \Rightarrow\
+\theta_{k+1}=\theta_k(1-\omega_k),\quad \sigma_{k+1}=\tfrac{\sigma_k}{1-\omega_k},\quad \omega_{k+1}=\eta\,\omega_k;
+\]
+otherwise $\theta_{k+1}=\theta_k$, $\sigma_{k+1}=\sigma_k$, $\omega_{k+1}=\omega_k$.
+Their constants: $\omega_0=\eta=0.95$.
+
+\paragraph{Two deviations from their line 1, stated rather than buried.}
+First, their line~1 chooses \emph{deliberately large} $\theta_0,\sigma_0$ and
+relies on a backtracking check (their line~4, halving both steps when it fails)
+to pull them back into the stable region. That backtracking step is \textbf{not}
+transcribed here and \textbf{not} implemented in \code{ladmm\_reordered.py}.
+Instead we start inside the stable region, $\theta_0\sigma_0<\lambda_{\max}(K^\top
+K)^{-1}$ with $K^\top K=AA^\top$ -- legitimate precisely because the product is
+invariant under the rule (next paragraph), so a start inside the region stays
+inside it forever and the backtracking branch could never fire. Second, their
+$\omega_0=0.95$ multiplies a step by $1/(1-\omega_0)=20$ on its first firing;
+that aggressiveness is presumably calibrated against the large-$\theta_0,\sigma_0$
+start it is paired with, and is worth re-examining here, where it lands on an
+already-stable starting point (Part V, and the ringing noted there).
+
+\paragraph{Source note, since two papers are easy to confuse.} The constants
+above -- $\omega_0=\eta=0.95$ and the hard-coded factor $2$ -- are
+Goldstein--Li--Yuan's own, from the three-author paper's Algorithm~1. They are
+\emph{not} the ones in the longer five-author technical report
+(Goldstein, Li, Yuan, Esser \& Baraniuk, arXiv:1305.0546), whose Algorithm~2 is
+the same rule with $\omega_0=0.5$, an imbalance threshold $\Delta=1.5$, and an
+extra residual pre-scale $s$ that does not appear here at all. The two are
+different write-ups of related schemes; their constants must not be mixed.
+
+Two structural remarks, both used in Part IV. Each branch multiplies one step by
+$(1-\omega_k)$ and divides the other by it, so the product $\theta_k\sigma_k$ is
+\emph{invariant} -- the rule cannot break the requirement it started inside, and
+equally cannot tune the product. And $\omega_k$ decays geometrically by $\eta$, so
+the adaptation switches itself off; that is what makes the perturbation summable
+and the convergence proof go through.
+
+\section*{Part III -- relating them}
+Part II fixed $F,G,K$ from \eqref{eq:saddle}. All that is left is to say which of
+Part I's quantities the iterates and steps are, and check the two lines. Two
+substitutions and two identifications:
+\[
+v^k:=-\delta^k,\qquad u^k:=x^k,\qquad \theta_k:=\gamma_k,\qquad \sigma_k:=\tfrac1{\tau_k}.
+\]
+Both are again the reverse of the obvious guess: their first-updated iterate is
+Part I's \emph{multiplier}, not its $x$; and their first step is Part I's
+\emph{penalty} $\gamma$, while their second is $1/\tau$.
+
+\subsection*{Line \eqref{eq:a1-1s}: the $y$- and $\delta$-updates collapse to one prox}
+\eqref{eq:y} and \eqref{eq:delta} are two steps in Part I but a single prox in
+the PDHG step, and Moreau's identity is what merges them. For $h:=f_2^*$,
+$t:=\gamma_k$ it reads
+$\prox_{\gamma_kf_2^*}(\zeta)=\zeta-\gamma_k\prox_{f_2/\gamma_k}(\zeta/\gamma_k)$ (verified
+numerically to machine precision in an earlier pass). Evaluate at
+$\zeta:=\gamma_kAx^{k}-\delta^{k}$, chosen so that $\zeta/\gamma_k=Ax^k-\delta^k/\gamma_k$
+is exactly \eqref{eq:y}'s argument and hence
+$\prox_{f_2/\gamma_k}(\zeta/\gamma_k)=y^{k+1}$:
+\[
+\prox_{\gamma_kf_2^*}\big(\gamma_kAx^{k}-\delta^{k}\big)
+= \gamma_k\big(Ax^{k}-y^{k+1}\big)-\delta^{k}
+\overset{\eqref{eq:r}}{=} \gamma_kr^{k}-\delta^{k}
+\overset{\eqref{eq:delta}}{=} -\delta^{k+1}.
+\]
+In the new letters the left side is
+$\prox_{\theta_kf_2^*}(v^k+\theta_kAu^k)$ and the right side is $v^{k+1}$, i.e.\
+exactly \eqref{eq:a1-1s}.\quad$\checkmark$
+
+(The middle equality is where $d$ must already sit inside $A$ -- see Part I. With
+$d$ carried loose, $Ax^k-y^{k+1}=r^k+d$ and the line ends at
+$-\delta^{k+1}+\gamma_kd$ instead.)
+
+\subsection*{Line \eqref{eq:a1-2s}: the $x$-update's bracket is the fixed $(2,-1)$}
+This is the step the choice of cut was made for. Because \eqref{eq:delta} and
+\eqref{eq:x} sit in the same cycle they refer to the same $\gamma_k$, so
+\eqref{eq:delta} rearranges to $\gamma_kr^{k}=\delta^{k}-\delta^{k+1}$ with no
+ratio of consecutive penalties anywhere, and \eqref{eq:x}'s bracket is
+\[
+\gamma_kr^{k}-\delta^{k+1}
+=\big(\delta^{k}-\delta^{k+1}\big)-\delta^{k+1}
+=\delta^{k}-2\delta^{k+1}
+\overset{\delta=-v}{=}2v^{k+1}-v^{k}
+\overset{\eqref{eq:a1-bar}}{=}\bar v^{k+1}.
+\]
+So \eqref{eq:x} reads
+$u^{k+1}=\prox_{(1/\tau_k)f_1}\big(u^k-\tfrac1{\tau_k}A^\top\bar v^{k+1}\big)$,
+which is \eqref{eq:a1-2s} with $\sigma_k=1/\tau_k$.\quad$\checkmark$
+
+Note what this did \emph{not} take: no lag, no auxiliary variable, no assumption
+that $\gamma_k$ is constant, and no generalized extrapolation coefficient.
+Part I's own bracket \emph{is} Goldstein--Li--Yuan's $\bar v^{k+1}$, line
+\eqref{eq:a1-bar}, unmodified.
+
+\subsection*{An exact equivalence}
+\[
+\boxed{v^k=-\delta^k,\quad u^k=x^k,\quad K=-A^\top,\quad F=f_2^*,\quad G=f_1,\quad
+\theta_k=\gamma_k,\quad \sigma_k=\tfrac1{\tau_k}}
+\]
+Part I \emph{is} the PDHG step -- both lines, unmodified template, fixed
+coefficients, no index offset between the two variables, for any
+$\gamma_k,\tau_k$. Their adaptive rule's updates therefore translate directly into
+$\gamma_{k+1}:=\theta_{k+1}$ and $\tau_{k+1}:=1/\sigma_{k+1}$, with nothing extra
+to carry along.
+
+\subsection*{Where did $y^k$ go?}
+Not lost -- Moreau's identity above only \emph{needed} the combination
+$\gamma_k(Ax^k-y^{k+1})-\delta^k$, but it computed it by evaluating
+$\prox_{f_2/\gamma_k}$ along the way, and that inner evaluation \emph{is}
+$y^{k+1}$ (\eqref{eq:y}, verbatim). Reading it back off from
+$\prox_{\gamma_kf_2^*}(\zeta)=\zeta-\gamma_ky^{k+1}=-\delta^{k+1}$ at
+$\zeta=\gamma_kAx^k-\delta^k$:
+\begin{equation}
+y^{k+1}=Ax^{k}+\frac{\delta^{k+1}-\delta^{k}}{\gamma_k}
+=Au^{k}+\frac{v^{k}-v^{k+1}}{\theta_k} \label{eq:yback}
+\end{equation}
+so $y$ is recoverable from $(v,u)$ at every iteration and needs no separate
+storage -- which is why \code{pdhg.py} can return this iteration's KE-optimal
+state as a by-product of its Moreau step rather than recomputing it.
+
+\subsection*{What the adaptive rule's residuals are, in Part I's own quantities}
+Substitute the dictionary into \eqref{eq:p}, using
+$\tfrac1{\gamma_k}(\delta^{k+1}-\delta^k)=-r^k$:
+\[
+p_{k+1}=\Big|\tfrac1{\gamma_k}\big(\delta^{k+1}-\delta^{k}\big)+A\big(x^{k}-x^{k+1}\big)\Big|
+=\big|-r^k+Ax^k-Ax^{k+1}\big|
+=\big|Ax^{k+1}-y^{k+1}-d\big|=\big|D^{k+1}\big|,
+\]
+the constraint violation $D^{k+1}$ \code{ladmm.py} already computes and stores.
+The affine constant cancels because only differences of $A$ enter. Likewise
+\eqref{eq:q}, using $v^k-v^{k+1}=\delta^{k+1}-\delta^k=-\gamma_kr^k$, becomes
+\[
+q_{k+1}=\Big|\tau_k\big(x^{k}-x^{k+1}\big)-\gamma_kA^\top r^{k}\Big|,
+\]
+built from quantities \eqref{eq:r}--\eqref{eq:x} compute anyway. Both identities
+were checked numerically (Part IV). So the rule driven by $p,q$ is driven by
+$\|D^{k+1}\|$ against a $\tau,\gamma$-weighted measure of the $x$-step -- not the
+same expression as \code{ladmm.py}'s own stored $P^k$, which is worth not
+conflating, but the same two ingredients.
+
+\section*{Part IV -- checks, and what stays open}
+\paragraph{Stability, recovered rather than assumed.}
+The rule needs $\theta_k\sigma_k<\lambda_{\max}(K^\top K)^{-1}$ (Part II). Here
+$K^\top K=AA^\top$ and $\theta_k\sigma_k=\gamma_k/\tau_k$, so the condition reads
+\[
+\frac{\gamma_k}{\tau_k}\,\lambda_{\max}(AA^\top)<1
+\qquad\Longleftrightarrow\qquad
+\tau_k>\gamma_k\|A\|^2,
+\]
+\emph{exactly} the convergence condition \code{ladmm.py} states for itself. Two
+consequences. Since $\|A\|_N^2\le1$ on any grid for this problem
+(\code{nonuniform\_grid\_norms.tex} Sec 6), $\tau_k>\gamma_k$ suffices -- the
+$\tau=101\gamma/100$ the configs use. And since each Algorithm-2 branch preserves
+$\theta_k\sigma_k$, it preserves $\gamma_k/\tau_k$: the rule moves $\gamma$ and
+$\tau$ by the \emph{same} factor and can never cross the stability boundary. That
+is the same shape as \code{ladmm.py}'s \code{BoydAdaptiveStepSize}, which rescales
+both together for exactly this reason; their rule differs in the trigger and in
+using a decaying factor $1/(1-\omega_k)$ rather than a fixed one. It also means
+the rule tunes only the common scale of $(\gamma,\tau)$, never their ratio.
+
+\paragraph{Causality, and the matched pair.}
+The rule forms $\theta_{k+1},\sigma_{k+1}$ -- that is $\gamma_{k+1}$ and
+$\tau_{k+1}$ -- from $p_{k+1},q_{k+1}$, which depend on
+$v^k,v^{k+1},u^k,u^{k+1}$, i.e.\ on $\delta^k,\delta^{k+1},x^k,x^{k+1}$. All four
+are in hand the moment cycle $k$ finishes, and cycle $k+1$ does not need
+$\gamma_{k+1}$ until its opening $y$-update. So the two step sizes come out of the
+same residual pair and govern the same cycle, which is what the rule assumes of
+its own $(\theta,\sigma)$.
+
+\paragraph{Checked numerically.}
+On a toy $f_1,f_2,A$ with genuinely varying $\gamma_k,\tau_k$, a nonzero constant
+$d$ folded into $A$, and $f_1$ a quadratic rather than an indicator -- so that
+$\prox_{(1/\tau_k)f_1}$ really does depend on its step, exercising the
+$\sigma_k=1/\tau_k$ identification and not just the gradient coefficient -- all of
+the following hold to machine precision: the bracket collapse of Part III; the
+Moreau collapse (and its failure by exactly $\gamma_kd$ when $d$ is left loose);
+\eqref{eq:a1-1s}--\eqref{eq:a1-2s} reproducing \eqref{eq:y}--\eqref{eq:x} iterate
+for iterate with no index offset; and both residual identities
+$p_{k+1}=|D^{k+1}|$, $q_{k+1}=|\tau_k(x^k-x^{k+1})-\gamma_kA^\top r^k|$.
+
+\paragraph{What is not claimed.}
+Two things. First, the reordered cycle and \code{ladmm.py} as it currently stands
+are the same sequence of iterates only when $\gamma$ is constant; once $\gamma$
+moves they differ (Part VI), so this is a statement about which adaptive LADMM to
+run, not a re-description of the current one. Second, whether their
+constants ($\omega_0=\eta=0.95$, factor $2$) are good \emph{here} is an
+empirical question this note does not touch; and Goldstein--Li--Yuan's
+backtracking variant, which is their only mechanism that changes
+$\theta_k\sigma_k$ and hence the one thing that could tune $\gamma/\tau$, is not
+transcribed above.
+
+\section*{Part V -- adaptive LADMM, written out}
+Everything needed is now fixed: Part III's dictionary says $\theta_k=\gamma_k$
+and $\sigma_k=1/\tau_k$, and gives the rule's residuals in Part I's own
+quantities. Substituting turns it into a rule on $(\gamma_k,\tau_k)$ with
+no PDHG left in it.
+
+\subsection*{Translating the step-size rule}
+Take their first branch, $\theta_{k+1}=\theta_k/(1-\omega_k)$ and
+$\sigma_{k+1}=\sigma_k(1-\omega_k)$, and read it through the dictionary:
+\[
+\gamma_{k+1}=\theta_{k+1}=\frac{\gamma_k}{1-\omega_k},
+\qquad
+\frac1{\tau_{k+1}}=\sigma_{k+1}=\frac{1-\omega_k}{\tau_k}
+\ \Longrightarrow\
+\tau_{k+1}=\frac{\tau_k}{1-\omega_k}.
+\]
+The second branch gives $\gamma_{k+1}=\gamma_k(1-\omega_k)$ and
+$\tau_{k+1}=\tau_k(1-\omega_k)$ the same way. So although their rule moves
+$\theta$ and $\sigma$ in \emph{opposite} directions, in LADMM's variables it
+scales $\gamma$ and $\tau$ by \emph{the same factor} -- because $\sigma$ is
+$1/\tau$, not $\tau$. That single observation is what makes the rule usable here,
+and it is worth stating separately (next subsection).
+
+\subsection*{The algorithm}
+Choose $x^0$, $\delta^0$ (e.g.\ $0$), initial steps $\gamma_0,\tau_0>0$ with
+$\tau_0>\gamma_0\|A\|^2$, and their constants $\omega_0,\eta\in(0,1)$
+(their Algorithm 1 line 1 sets $\omega_0=\eta=0.95$).
+For $k=0,1,2,\dots$:
+\begin{enumerate}
+\item[(1)] $y^{k+1}=\prox_{f_2/\gamma_k}\big(Ax^{k}-\delta^{k}/\gamma_k\big)$
+\item[(2)] $r^{k}=Ax^{k}-y^{k+1}-d$
+\item[(3)] $\delta^{k+1}=\delta^{k}-\gamma_kr^{k}$
+\item[(4)] $x^{k+1}=\prox_{(1/\tau_k)f_1}\Big(x^{k}-\tfrac1{\tau_k}A^\top\big(\delta^{k}-2\delta^{k+1}\big)\Big)$
+\item[(5)] residuals, from quantities (1)--(4) already produced:
+\[
+p_{k+1}=\big\|Ax^{k+1}-y^{k+1}-d\big\|=\big\|D^{k+1}\big\|,
+\qquad
+q_{k+1}=\big\|\tau_k\big(x^{k}-x^{k+1}\big)-\gamma_kA^\top r^{k}\big\|
+\]
+\item[(6)] adapt, by the \emph{same} factor on both steps:
+\[
+\begin{array}{llll}
+p_{k+1}>2\,q_{k+1}:
+ &\gamma_{k+1}=\dfrac{\gamma_k}{1-\omega_k},
+ &\tau_{k+1}=\dfrac{\tau_k}{1-\omega_k},
+ &\omega_{k+1}=\eta\,\omega_k\\[2.2ex]
+2\,p_{k+1}<q_{k+1}:
+ &\gamma_{k+1}=\gamma_k(1-\omega_k),
+ &\tau_{k+1}=\tau_k(1-\omega_k),
+ &\omega_{k+1}=\eta\,\omega_k\\[2.2ex]
+\text{otherwise:}
+ &\gamma_{k+1}=\gamma_k, &\tau_{k+1}=\tau_k, &\omega_{k+1}=\omega_k
+\end{array}
+\]
+\end{enumerate}
+Step (4) is \eqref{eq:x} with its bracket already collapsed
+($\gamma_kr^k-\delta^{k+1}=\delta^k-2\delta^{k+1}$, Part III), which is both
+cheaper and the form that makes the extrapolation visible. Steps (1)--(4) are
+Part I verbatim; only (5)--(6) are new.
+
+\subsection*{What the translation buys}
+\paragraph{The stability margin is preserved for free.}
+Both branches multiply $\gamma_k$ and $\tau_k$ by the same number, so
+\[
+\frac{\gamma_k}{\tau_k}=\frac{\gamma_0}{\tau_0}\quad\text{for every }k,
+\]
+and $\tau_k>\gamma_k\|A\|^2$ holds at every iteration if and only if it holds at
+$k=0$. No per-iteration check, no backtracking, no re-estimate of $\|A\|$. This is
+the LADMM reading of Part IV's observation that the rule leaves
+$\theta_k\sigma_k$ invariant -- and it is exactly the property
+\code{ladmm.py}'s \code{BoydAdaptiveStepSize} was hand-built to have, here
+arriving as a consequence rather than a design choice. With $\|A\|^2\le1$ on this
+problem, $\tau_0>\gamma_0$ suffices, e.g.\ the $\tau_0=1.01\gamma_0$ the configs
+already use.
+
+\paragraph{$\delta$ needs no rescaling when $\gamma$ changes.}
+A live worry in \code{ladmm.py}'s docstring (``no rescaling of delta when gamma
+changes''). The correspondence settles it: the PDHG iterate is $v^k=-\delta^k$
+with \emph{no} $\gamma$ in the relation, and the rule simply hands the next
+iteration a new $\theta_{k+1}$ without transforming $v$. So not rescaling
+$\delta$ is correct, not an approximation. (The worry is a real one for
+\emph{scaled}-form ADMM, where the stored dual is $\delta/\gamma$ and a change in
+$\gamma$ does move it; this formulation stores the unscaled $\delta$.)
+
+\paragraph{What it still cannot do.}
+Since $\gamma_k/\tau_k$ is frozen at its initial value, the rule tunes only the
+common scale of the two steps, never their ratio. A badly chosen ratio -- $\tau_0$
+far above $\gamma_0\|A\|^2$, i.e.\ over-damped -- stays badly chosen. Changing it
+needs a mechanism that moves $\theta_k\sigma_k$, which in Goldstein--Li--Yuan is
+the backtracking variant, not transcribed here.
+
+\subsection*{Against \code{ladmm.py}'s current rule -- a direction to check}
+\code{BoydAdaptiveStepSize} has the same shape (rescale $\tau$ and $\gamma$
+together) but triggers the opposite way. Written against this module's own stored
+histories, it does
+\[
+P^k>\mu D^k\ \Rightarrow\ \gamma,\tau\ \text{both}\times\text{factor};
+\qquad
+D^k>\mu P^k\ \Rightarrow\ \gamma,\tau\ \text{both}\div\text{factor},
+\]
+i.e.\ it \emph{increases} the steps when $D^k$ -- the constraint violation -- is
+\emph{small} relative to $P^k$. The rule derived above does the reverse:
+$p_{k+1}=\|D^{k+1}\|$ large is precisely the branch that increases $\gamma$ and
+$\tau$. Boyd et al.\ (2011, \S3.4.1) themselves increase the penalty when the
+\emph{primal} residual (the constraint violation) dominates, agreeing with the
+translated rule and not with the code.
+
+Flagged rather than asserted, because the two ``dual residuals'' are not the same
+expression -- $q_{k+1}$ above is $\tau_k(x^k-x^{k+1})-\gamma_kA^\top r^k$, while
+\code{ladmm.py}'s $P^k$ is $\tau(x^{k-1}-x^k)+\gamma A^\top(D^{k-1}-D^k)$ -- so
+this is not literally the same test. But the plain reading is that
+\code{ladmm.py}'s module docstring names $D$ the ``dual residual'' and $P$ the
+``primal residual'', inverted relative to Boyd's own convention ($D=Ax+By-b$ is
+Boyd's \emph{primal} residual), and that the inversion propagated into the
+direction of the rule. Worth checking against a run before trusting either.
+
+\subsection*{Checked numerically}
+The algorithm above was run against the PDHG step + adaptive rule (Part II) on the
+toy problem of Part IV, from the same start, to a $10^{-12}$ residual tolerance.
+Both stop at the same iteration (66), with the adaptation firing on 10 of them and
+sweeping $\gamma$ over a factor of about $72$; $x^k$ and $\delta^k$ agree with
+$u^k$ and $-v^k$ to machine precision throughout, $\gamma_k$ matches $\theta_k$
+to \emph{exactly} zero, and $\gamma_k/\tau_k$ is constant to $15$ digits. Past
+convergence the two part ways harmlessly: with $p_{k+1},q_{k+1}$ both at
+rounding-noise level ($\sim10^{-16}$), the branch test in \eqref{eq:p}--\eqref{eq:q}
+is decided by rounding, and the two algebraically-equal residual formulas round
+differently. Any implementation with a stopping rule never reaches that regime --
+but it is a reason not to keep adapting after the residuals stop being meaningful.
+
+\section*{Part VI -- what does the adaptive-LADMM literature actually do?}
+Checked (web search, not exhaustive) rather than assumed. Two representative
+papers that adapt a linearized-ADMM-style penalty:
+\begin{itemize}
+\item Lin, Liu \& Su, ``Linearized Alternating Direction Method with Adaptive
+Penalty for Low-Rank Representation,'' NeurIPS 2011 (arXiv:1109.0367) -- LADMAP.
+Linearizes one subproblem exactly the way Part I does; adapts the penalty from a
+feasibility/residual condition. \textbf{No extrapolation or momentum term
+anywhere} -- no $2v^{k+1}-v^k$, no combination of past dual iterates.
+\item Xu, Figueiredo \& Goldstein, ``Adaptive ADMM with Spectral Penalty
+Parameter Selection,'' AISTATS 2017 (arXiv:1605.07246) -- penalty adapted each
+iteration via a Barzilai--Borwein spectral estimate from the primal/dual
+residuals. Again a residual-driven penalty update on the standard subproblems,
+with no extrapolation step.
+\end{itemize}
+Neither frames its adaptivity in terms of PDHG or Chambolle--Pock at all.
+
+\paragraph{Why that is a different algorithm.} Both run the \emph{other} cut --
+\code{ladmm.py}'s own $(r,x,y,\delta)$, with the residual taken against the stored
+$y$. Redo Part III's bracket calculation there. The $x$-update's bracket is
+$w^k=\gamma_kD^k-\delta^k$ with $D^k=Ax^k-y^k-d$, but the $\delta$-update that
+produced $\delta^k$ used the \emph{previous} penalty,
+$\gamma_{k-1}D^{k}=\delta^{k-1}-\delta^{k}$, so the two disagree by a ratio:
+\[
+w^k=\rho_k\big(\delta^{k-1}-\delta^k\big)-\delta^k
+=(1+\rho_k)v^k-\rho_kv^{k-1},\qquad \rho_k:=\frac{\gamma_k}{\gamma_{k-1}}.
+\]
+That is the PDHG step's extrapolation only when $\rho_k=1$. So, as best determined
+here: \textbf{the adaptive-LADMM scheme this literature runs is a genuinely
+different algorithm from adaptive PDHG whenever the penalty actually changes
+between iterations, and coincides with it exactly when the penalty is constant.}
+The fixed $(2,-1)$ was never the obstacle -- the cut point was.
+
+\paragraph{Closest related idea found, for honesty's sake.} Malitsky's
+golden-ratio and reflected-gradient work (e.g.\ ``Golden Ratio Algorithms for Variational
+Inequalities,'' 2018/2020) tracks exactly this kind of issue in a related setting:
+its reflected/extrapolated schemes are proven equivalent to the relevant
+primal-dual method \emph{under constant step sizes}, and its adaptive-step variants
+build the step size and the extrapolation from the same local history rather than
+treating them independently. So the phenomenon -- adaptive steps forcing the
+extrapolation term to track step-size history unless the iteration is arranged to
+avoid it -- is not unprecedented; what was not found stated anywhere is this
+specific comparison, for LADMM's own common adaptive-penalty practice against
+Goldstein--Li--Yuan's adaptive PDHG.
+\end{document}
