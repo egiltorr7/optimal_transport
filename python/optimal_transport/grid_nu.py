@@ -29,7 +29,8 @@ class ProblemNU:
     t_centers: np.ndarray    # (nt,)   time-grid cell centers, mx/phi live here
     dx: float
     L: float
-    xx: np.ndarray           # (nx,) cell-center spatial coordinates on [0, L]
+    x_min: float             # left edge of the domain; the grid spans [x_min, x_min+L]
+    xx: np.ndarray           # (nx,) cell-center spatial coordinates
     rho0: np.ndarray         # (nx,) discrete probability density, sum(rho0)*dx == 1
     rho1: np.ndarray
     rho0_pdf: np.ndarray     # (nx,) raw pdf samples, integrates to ~1 over R
@@ -46,11 +47,14 @@ class ProblemNU:
         return 1.0 / self.nt
 
 
-def setup_problem_nu(prob_def: ProblemDef, time_grid: TimeGrid, nx: int, L: float = 1.0) -> ProblemNU:
+def setup_problem_nu(prob_def: ProblemDef, time_grid: TimeGrid, nx: int, L: float = 1.0,
+                     x_min: float = 0.0) -> ProblemNU:
     dx = L / nx
 
-    # Cell-center spatial grid on [0, L] -- identical to grid.py's setup_problem.
-    x = np.linspace(0.0, L, nx + 1)
+    # Cell-center grid on [x_min, x_min+L] -- identical to grid.py's setup_problem.
+    # See its docstring: only the offset is new, and lambda_x below is unaffected
+    # by it (translation-invariant), changing only through dx.
+    x = np.linspace(x_min, x_min + L, nx + 1)
     xx = 0.5 * (x[:-1] + x[1:])
 
     rho0_pdf = prob_def.rho0_func(xx)
@@ -63,7 +67,7 @@ def setup_problem_nu(prob_def: ProblemDef, time_grid: TimeGrid, nx: int, L: floa
     return ProblemNU(
         nt=time_grid.nt, nx=nx,
         dt_vec=time_grid.dt_vec, t_edges=time_grid.t_edges, t_centers=time_grid.t_centers,
-        dx=dx, L=L, xx=xx,
+        dx=dx, L=L, x_min=x_min, xx=xx,
         rho0=rho0, rho1=rho1, rho0_pdf=rho0_pdf, rho1_pdf=rho1_pdf,
         mu0=prob_def.mu0, mu1=prob_def.mu1, sigma=prob_def.sigma,
         name=prob_def.name,

@@ -5,6 +5,9 @@
 *.asv
 *.m~
 
+# Python data files
+*.npz
+
 # Figures (optional - remove line if you want to track figures)
 # 2d/figures/*.png
 # 2d/figures/*.gif

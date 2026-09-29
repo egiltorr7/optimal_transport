@@ -66,7 +66,14 @@ def discretize_then_optimize(
     dt, dx = problem.dt, problem.dx
 
     if x0 is None or y0 is None:
-        t_stag = np.linspace(0.0, 1.0, ntm)[:, None]
+        # rho's INTERIOR time edges, t = k*dt for k=1..ntm -- not
+        # linspace(0, 1, ntm), which put the first node at t=0 and the last
+        # at t=1. Those are the two Dirichlet BOUNDARIES (rho0 and rho1), not
+        # interior nodes, so the old seed was the right interpolant sampled at
+        # the wrong places -- a worse starting point, and it made this pipeline
+        # disagree with the *_nu sibling (which reads t_edges[1:-1] correctly)
+        # even on a uniform grid, where the two are the same problem.
+        t_stag = (np.arange(1, ntm + 1) * dt)[:, None]
         x0 = State(
             rho=(1 - t_stag) * rho0 + t_stag * rho1,  # (ntm, nx)
             mx=np.zeros((nt, nxm)),

@@ -1,0 +1,3 @@
+vareps,n,grid,iters,converged,walltime_s,D_final,P_final,refs,err_rho_analytic,err_rho_sinkhorn_same,err_rho_sinkhorn_fine,err_full_analytic,err_full_sinkhorn_same,err_full_sinkhorn_fine,file
+1.00000000e-01,64,clustered,40000,0,5.18000000e+01,2.43299090e-04,9.39703847e-09,sinkhorn_fine;sinkhorn_same,,9.92822164e-03,7.98390592e-03,,2.73420079e-02,2.60408758e-02,gaussian_eps0.1_n64_clustered_ETD.npz
+1.00000000e+00,64,clustered,40000,0,5.06000000e+01,3.03233685e-03,2.40625290e-07,sinkhorn_fine;sinkhorn_same,,2.88369974e-02,2.80507853e-02,,6.88464568e-01,6.88482703e-01,gaussian_eps1_n64_clustered_ETD.npz

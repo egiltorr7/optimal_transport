@@ -262,41 +262,28 @@ def check_projection_is_idempotent_nonuniform() -> bool:
 
 # ---------------------------------------------------------------- 7
 def check_pipeline_reduces_to_uniform() -> bool:
-    """Same iterate trajectory, given the same starting point.
+    """Same iterate trajectory, from each solver's OWN default starting point.
 
-    x0/y0 are built here and passed to both solvers explicitly, rather than
-    letting each build its own default. The two defaults genuinely differ,
-    and not because of anything non-uniform: pipeline_2d.py places x0's rho
-    on jnp.linspace(0, 1, ntm) (inherited from the 1D pipeline.py), whereas
-    the staggered rho actually lives on the ntm *interior* time edges,
-    t_edges[1:-1] = [1/nt, ..., (nt-1)/nt] -- which is what pipeline_nu_2d.py
-    uses, following pipeline_nu.py's deliberate correction of exactly this.
-    Both converge to the same solution, so it only matters for a fixed
-    iteration budget; pinning x0/y0 makes this check measure the solver path
-    (A*, norms, projection, prox) instead of that initial-guess difference.
+    This check used to build x0/y0 here and pass them to both solvers, because
+    the two defaults genuinely differed: pipeline_2d.py placed x0's rho on
+    jnp.linspace(0, 1, ntm) (inherited from the 1D pipeline.py) whereas the
+    staggered rho lives on the ntm *interior* time edges, t_edges[1:-1] =
+    [1/nt, ..., (nt-1)/nt], which is what pipeline_nu_2d.py uses. That was a
+    real bug in pipeline_2d.py, not a legitimate difference of convention, and
+    it is now fixed at the source (pipeline.py, pipeline_2d.py and
+    pipeline_3d.py all seed from k*dt). So the pinning is gone: letting each
+    solver build its own default makes this check cover the initial guesses too,
+    on top of the solver path (A*, norms, projection, prox) it always covered.
     """
     pu, pn = _uniform_problem(), _nu_problem(uniform_time_grid(NT))
     kw = dict(gamma=1.0, tau=1.01, max_iter=30, eps_abs=1e-15, eps_rel=1e-15)
 
-    t_stag = pn.t_edges[1:-1][:, None, None]
-    t_cc = pn.t_centers[:, None, None]
-    x0 = State2D(
-        rho=(1 - t_stag) * pn.rho0[None] + t_stag * pn.rho1[None],
-        mx=jnp.zeros((NT, NX - 1, NY)),
-        my=jnp.zeros((NT, NX, NY - 1)),
-    )
-    y0 = State2D(
-        rho=(1 - t_cc) * pn.rho0[None] + t_cc * pn.rho1[None],
-        mx=jnp.zeros((NT, NX, NY)),
-        my=jnp.zeros((NT, NX, NY)),
-    )
-
     ru = discretize_then_optimize_2d(
         pu, proj_fokker_planck_banded_2d, precomp_banded_proj_2d(pu, VAREPS),
-        VAREPS, LadmmConfig(**kw), x0=x0, y0=y0)
+        VAREPS, LadmmConfig(**kw))
     rn = discretize_then_optimize_nu_2d(
         pn, proj_fokker_planck_banded_nu_2d, precomp_banded_proj_nu_2d(pn, VAREPS),
-        VAREPS, LadmmConfigNU(**kw), x0=x0, y0=y0)
+        VAREPS, LadmmConfigNU(**kw))
 
     worst = max(_rel(rn.rho_stag, ru.rho_stag), _rel(rn.mx_stag, ru.mx_stag),
                 _rel(rn.my_stag, ru.my_stag), _rel(rn.rho_cc, ru.rho_cc),

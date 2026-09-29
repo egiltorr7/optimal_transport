@@ -1,0 +1,3 @@
+vareps,n,grid,iters,converged,walltime_s,ms_per_iter,peak_gpu_mem_mb,precision,D_final,P_final,refs,err_rho_analytic,err_rho_sinkhorn_same,err_rho_sinkhorn_fine,err_full_analytic,err_full_sinkhorn_same,err_full_sinkhorn_fine,file
+0.00000000e+00,128,uniform,40000,0,4.70000000e+01,1.12600000e+00,1026,fp64rx,5.82452444e-06,2.06875813e-08,analytic,3.37697588e-04,,,2.07775205e-03,,,gaussian_eps0_n128_uniform_ETD.npz
+0.00000000e+00,64,uniform,40000,0,1.13000000e+01,2.52000000e-01,1026,fp64rx,6.19811274e-06,1.06081403e-08,analytic,5.15819916e-03,,,1.00706423e-02,,,gaussian_eps0_n64_uniform_ETD.npz

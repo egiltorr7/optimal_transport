@@ -57,6 +57,10 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
 %     info.res_x      (n_iters x 1)  ||x^{t+1} - x^t||  -- convergence criterion
 %     info.res_y      (n_iters x 1)  ||y^{t+1} - y^t||
 %     info.res_primal (n_iters x 1)  ||A*x - y||         -- primal feasibility
+%     info.res_dual   (n_iters x 1)  ||tau*(x^t-x^{t+1}) + gamma*A^T(D^t-D^{t+1})||
+%                                    -- dual feasibility for the LINEARIZED
+%                                    scheme. Note this is NOT ||y-y_prev||;
+%                                    see the comment at its computation.
 %     info.residual   alias for info.res_x (backward compat)
 %     info.iters      number of iterations taken
 %     info.converged  true if stopped due to tolerance
@@ -89,6 +93,9 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
     res_x       = zeros(max_iter, 1);
     res_y       = zeros(max_iter, 1);
     res_primal  = zeros(max_iter, 1);
+    res_dual    = zeros(max_iter, 1);
+    % D^0 for the dual residual below: the constraint violation at the start.
+    D_prev      = s_sub(s_add(A_fn(x0), By), b);
     stalled  = false;
     diverged = false;
 
@@ -141,7 +148,19 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
         if debug_timing, tw = tic; end
         res_x(t)      = norm_fn(s_sub(x, x_prev));
         res_y(t)      = norm_fn(s_sub(y, y_prev));
-        res_primal(t) = norm_fn(s_sub(Ax, y));
+        % Primal residual: the constraint violation D = A*x + B*y - b (here
+        % B = -I and b = 0, so this is A*x - y).
+        D             = s_sub(s_add(Ax, By), b);
+        res_primal(t) = norm_fn(D);
+        % Dual residual for THIS algorithm. Not ||y - y_prev||: linearizing
+        % the x-step changes the optimality condition, and the residual that
+        % actually certifies dual feasibility for Fang-He-Liu-Yuan LADMM is
+        %     P = tau*(x^t - x^{t+1}) + gamma*A^T*(D^t - D^{t+1}),
+        % matching the 1D/Python ladmm.py so the three implementations report
+        % the same quantity. Costs one extra At_fn per iteration.
+        res_dual(t)   = norm_fn(s_add(s_scale(tau,   s_sub(x_prev, x)), ...
+                                      s_scale(gamma, At_fn(s_sub(D_prev, D)))));
+        D_prev        = D;
         if debug_timing, t_norm = t_norm + toc(tw); end
 
         iter_times(t) = toc(t_iter_start);
@@ -153,6 +172,7 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
             res_x      = res_x(1:t);
             res_y      = res_y(1:t);
             res_primal = res_primal(1:t);
+            res_dual   = res_dual(1:t);
             if print_every > 0
                 fprintf('  [ADMM]  *** DIVERGED at iter %d: res_x = %g ***\n', t, res_x(t));
                 fprintf('  [ADMM]  Possible cause: Thomas instability (eps/dt > 1). Try proj_fokker_planck_spike2.\n');
@@ -176,6 +196,7 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
             res_x      = res_x(1:t);
             res_y      = res_y(1:t);
             res_primal = res_primal(1:t);
+            res_dual   = res_dual(1:t);
             if print_every > 0
                 best_res = min(res_x);
                 sec_iter = mean(iter_times_win(iter_times_win > 0));
@@ -214,6 +235,7 @@ function [x, y, delta, info] = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, 
     info.res_x      = res_x;
     info.res_y      = res_y;
     info.res_primal = res_primal;
+    info.res_dual   = res_dual;
     info.residual   = res_x;   % backward compat alias
     info.iters      = length(res_x);
     info.converged  = ~diverged && res_x(end) < tol;

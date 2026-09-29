@@ -66,7 +66,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import jax
 import jax.numpy as jnp
+from jax import lax
 
 from .projection_2d import dct2_xy, idct2_xy
 from .state_2d import State2D
@@ -83,33 +85,36 @@ def thomas_batch_precomp_general(main: jnp.ndarray, sub: jnp.ndarray) -> jnp.nda
     Generalizes projection_2d.py's thomas_batch_precomp (single scalar `e`
     shared by every row, the uniform grid's Toeplitz case) to a row-varying
     off-diagonal; reduces to it when sub is constant down its first axis.
-    Accumulates into a list and stacks once, for that module's reason: JAX
-    arrays are immutable, so projection_nu.py's in-place main_mod[i] = ...
-    has no equivalent here.
+    A lax.scan, as there: one traced step run nt-1 times, rather than nt-1
+    separately dispatched ops.
     """
-    nt = main.shape[0]
-    rows = [main[0]]
-    for i in range(1, nt):
-        w = sub[i - 1] / rows[-1]
-        rows.append(main[i] - w * sub[i - 1])
-    return jnp.stack(rows, axis=0)
+    def body(prev, inp):
+        m_i, s_i = inp
+        new = m_i - (s_i / prev) * s_i
+        return new, new
+
+    _, rest = lax.scan(body, main[0], (main[1:], sub))
+    return jnp.concatenate([main[:1], rest], axis=0)
 
 
 def thomas_batch_solve_general(main_mod: jnp.ndarray, sub: jnp.ndarray, rhs: jnp.ndarray) -> jnp.ndarray:
     """Back-substitute systems precomputed by thomas_batch_precomp_general."""
-    nt = rhs.shape[0]
+    def fwd(prev, inp):
+        s_i, mm_prev, r_i = inp
+        new = r_i - (s_i / mm_prev) * prev
+        return new, new
 
-    f_rows = [rhs[0]]
-    for i in range(1, nt):
-        w = sub[i - 1] / main_mod[i - 1]
-        f_rows.append(rhs[i] - w * f_rows[-1])
+    _, f_rest = lax.scan(fwd, rhs[0], (sub, main_mod[:-1], rhs[1:]))
+    f = jnp.concatenate([rhs[:1], f_rest], axis=0)
 
-    x_rows = [f_rows[-1] / main_mod[-1]]
-    for i in range(nt - 2, -1, -1):
-        x_rows.append((f_rows[i] - sub[i] * x_rows[-1]) / main_mod[i])
-    x_rows.reverse()
+    def bwd(nxt, inp):
+        f_i, s_i, mm_i = inp
+        new = (f_i - s_i * nxt) / mm_i
+        return new, new
 
-    return jnp.stack(x_rows, axis=0)
+    x_last = f[-1] / main_mod[-1]
+    _, x_rest = lax.scan(bwd, x_last, (f[:-1], sub, main_mod[:-1]), reverse=True)
+    return jnp.concatenate([x_rest, x_last[None]], axis=0)
 
 
 def _probe_composite_ops(ops, nt: int, vareps: float, dt_dual: jnp.ndarray,
@@ -158,6 +163,9 @@ class BandedProjNU2D:
     main_mod: jnp.ndarray  # (nt, nx, ny)   Thomas-modified diagonal, all modes
     sub: jnp.ndarray       # (nt-1, nx, ny) off-diagonal, all modes
     M0_pinv: jnp.ndarray   # (nt, nt) pseudo-inverse of the singular DC system, T = M0
+
+
+jax.tree_util.register_dataclass(BandedProjNU2D, data_fields=["main_mod", "sub", "M0_pinv"], meta_fields=[])
 
 
 def precomp_banded_proj_nu_2d(problem, vareps: float) -> BandedProjNU2D:
