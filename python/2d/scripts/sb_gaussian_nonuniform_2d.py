@@ -63,7 +63,7 @@ X64 = True        # float64. The main GPU MEMORY knob: x64=False halves the
 PLOT = "auto"     # "auto" | "on" | "off". "auto" plots on CPU and skips on
                   # GPU/TPU: on a GPU run the figures are the slow, useless
                   # part -- the .npz is written either way, post-process later.
-GPU_ID = None     # WHICH physical GPU, on a multi-GPU box (None = leave
+GPU_ID = 1     # WHICH physical GPU, on a multi-GPU box (None = leave
                   # CUDA_VISIBLE_DEVICES alone). --device gpu only picks the
                   # PLATFORM; without this JAX sees every card and preallocates
                   # memory on all of them, so a run that computes on one still
@@ -157,7 +157,7 @@ STRENGTH = 1.0       # clustered only: 0=uniform, 1=full cosine clustering
 N_BOUNDARY = 2       # graded_ends only: cells graded at each end
 GAMMA = 1.0
 TAU = GAMMA * 1.01
-MAX_ITER = 40_000
+MAX_ITER = 10_000
 EPS_ABS = 1e-10
 EPS_REL = 1e-8
 N_SNAPSHOTS = 5      # time slices drawn in both figures
