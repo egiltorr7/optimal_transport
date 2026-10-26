@@ -48,9 +48,14 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 
 from .ladmm import LadmmInfo, LadmmOpts, ladmm_solve
+from .ladmm_jit import ladmm_solve_jit
 from .operators_nu_2d import interp_t_at_rho_weighted
 from .prox_nu_2d import prox_ke_cc_nu_2d
 from .state_2d import State2D
+
+
+def _cast_state(v: State2D, dtype) -> State2D:
+    return v if v.rho.dtype == dtype else State2D(v.rho.astype(dtype), v.mx.astype(dtype), v.my.astype(dtype))
 
 
 @dataclass
@@ -61,6 +66,16 @@ class LadmmConfig:
     eps_abs: float   # absolute floor for the D/P stopping criterion (see ladmm.py)
     eps_rel: float   # relative tolerance for the D/P stopping criterion
     alpha: float = 1.0  # over-relaxation
+    jit: bool = False   # run ladmm_jit.ladmm_solve_jit instead of the eager ladmm.ladmm_solve
+    check_every: int = 1  # jit only: iterations per compiled call (see ladmm_jit.py)
+    diag_level: str = "full"  # jit only: "full" or "stopping" (see ladmm_jit._make_step)
+    master_dtype: object = None  # jit only: keep x and delta in this dtype, e.g. jnp.float64, while
+    #                              the rest runs in the problem's (see ladmm_jit.py / precision.py)
+    round_x_dtype: object = None  # jit only: round x to this dtype before A_fn (ladmm_jit.py)
+    prox_dtype: object = None    # run the KE prox arithmetic in this dtype (default: z_hat's)
+    y_dtype: object = None       # store the prox output (y, hence By and D) in this dtype (default: z_hat's)
+    consistent_dual: bool = False  # jit only: dual = -grad KE at the stored y, in master_dtype
+    #                              (ladmm_jit.py docstring: required when y is float32)
 
 
 @dataclass
@@ -85,6 +100,8 @@ def discretize_then_optimize_nu_2d(
     x_ref: State2D | None = None,
     delta_ref: State2D | None = None,
     delta_mask: State2D | None = None,
+    x_refs: dict[str, State2D] | None = None,
+    track_rho: bool = False,
 ) -> SolveResultNU2D:
 
     ops = problem.ops
@@ -93,26 +110,29 @@ def discretize_then_optimize_nu_2d(
     ntm, nxm, nym = nt - 1, nx - 1, ny - 1
     dt_vec, dt_dual = problem.dt_vec, problem.dt_dual
     cell_area = problem.cell_area
+    dtype = rho0.dtype   # see pipeline_2d.py: float32 problem -> float32 iteration
 
     if x0 is None or y0 is None:
         t_stag = problem.t_edges[1:-1][:, None, None]  # (ntm,1,1) -- interior rho nodes
         x0 = State2D(
             rho=(1 - t_stag) * rho0[None, :, :] + t_stag * rho1[None, :, :],  # (ntm, nx, ny)
-            mx=jnp.zeros((nt, nxm, ny)),
-            my=jnp.zeros((nt, nx, nym)),
+            mx=jnp.zeros((nt, nxm, ny), dtype),
+            my=jnp.zeros((nt, nx, nym), dtype),
         )
         t_cc = problem.t_centers[:, None, None]  # (nt,1,1)
         y0 = State2D(
             rho=(1 - t_cc) * rho0[None, :, :] + t_cc * rho1[None, :, :],  # (nt, nx, ny)
-            mx=jnp.zeros((nt, nx, ny)),
-            my=jnp.zeros((nt, nx, ny)),
+            mx=jnp.zeros((nt, nx, ny), dtype),
+            my=jnp.zeros((nt, nx, ny), dtype),
         )
 
+    if ladmm_cfg.y_dtype is not None:
+        y0 = _cast_state(y0, ladmm_cfg.y_dtype)   # y carries the prox output dtype
     b = State2D.zeros_like(y0)
 
     gamma = ladmm_cfg.gamma
-    zeros_x = jnp.zeros((nt, ny))
-    zeros_y = jnp.zeros((nt, nx))
+    zeros_x = jnp.zeros((nt, ny), dtype)
+    zeros_y = jnp.zeros((nt, nx), dtype)
 
     def A_fn(x: State2D) -> State2D:
         return State2D(
@@ -131,13 +151,17 @@ def discretize_then_optimize_nu_2d(
     def B_fn(y: State2D) -> State2D:
         return y * -1.0
 
-    def prox_f1(v: State2D, step: float) -> State2D:
-        return projection(v, problem, vareps, projection_state)
+    def prox_f1(v: State2D, step: float, ps=projection_state) -> State2D:
+        # `ps` defaults to the closed-over precompute for the eager solver;
+        # the jit solver passes it explicitly (ladmm_jit.py).
+        return projection(v, problem, vareps, ps)
 
     def solve_y(delta: State2D, z_hat: State2D, gamma: float) -> State2D:
         # gamma passed in, not the outer closed-over gamma -- see
         # pipeline_2d.py's solve_y.
-        return prox_ke_cc_nu_2d(z_hat - delta * (1.0 / gamma), 1.0 / gamma)
+        arg = z_hat - delta * (1.0 / gamma)   # see pipeline_2d.py's solve_y
+        y = prox_ke_cc_nu_2d(_cast_state(arg, ladmm_cfg.prox_dtype or z_hat.rho.dtype), 1.0 / gamma)
+        return _cast_state(y, ladmm_cfg.y_dtype or z_hat.rho.dtype)
 
     def _weighted_sq_sum(v: State2D) -> float:
         # Non-uniform Riemann sum, pipeline_nu.py's with dx -> dx*dy: rho/mx/my
@@ -155,14 +179,24 @@ def discretize_then_optimize_nu_2d(
             + jnp.sum(dt_vec[:, None, None] * v.my**2)
         )
 
+    def _norm_jnp(v: State2D):
+        return jnp.sqrt(_weighted_sq_sum(v))
+
+    def _rho_norm_jnp(v: State2D):
+        # rho alone (same time weights as _weighted_sq_sum), for x_refs tracking.
+        w_rho = dt_vec if v.rho.shape[0] == nt else dt_dual
+        return jnp.sqrt(cell_area * jnp.sum(w_rho[:, None, None] * v.rho**2))
+
+    # The jit solver needs jnp scalars (float() cannot trace); the eager one
+    # wants Python floats. Same formula either way.
     def norm_fn(v: State2D) -> float:
-        return float(jnp.sqrt(_weighted_sq_sum(v)))
+        return float(_norm_jnp(v))
 
     def dual_norm_fn(v: State2D) -> float:
         # delta's numeric value is grid-convention-independent (homogeneous
         # of degree 0), so the same weighted formula carries over -- see
         # pipeline_2d.py's dual_norm_fn.
-        return float(jnp.sqrt(_weighted_sq_sum(v)))
+        return float(_norm_jnp(v))
 
     opts = LadmmOpts(
         gamma=gamma,
@@ -171,14 +205,36 @@ def discretize_then_optimize_nu_2d(
         eps_abs=ladmm_cfg.eps_abs,
         eps_rel=ladmm_cfg.eps_rel,
         alpha=ladmm_cfg.alpha,
-        norm_fn=norm_fn,
-        dual_norm_fn=dual_norm_fn,
+        norm_fn=_norm_jnp if ladmm_cfg.jit else norm_fn,
+        dual_norm_fn=_norm_jnp if ladmm_cfg.jit else dual_norm_fn,
         x_ref=x_ref,
         delta_ref=delta_ref,
         delta_mask=delta_mask,
+        x_refs=x_refs,
+        rho_norm_fn=(_rho_norm_jnp if ladmm_cfg.jit else (lambda v: float(_rho_norm_jnp(v))))
+        if track_rho else None,
     )
 
-    x, y, _, info = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, b, x0, y0, opts)
+    def _dual_from_y(y: State2D, delta_std: State2D) -> State2D:
+        # -grad KE(y) = (|m|^2/(2 rho^2), -mx/rho, -my/rho) where rho > 0, in
+        # the dual's (master) dtype from the stored y; the prox's clamped cells
+        # (rho = 0) keep the standard update, which is a valid subgradient there.
+        dt_ = delta_std.rho.dtype
+        rho, mx, my = y.rho.astype(dt_), y.mx.astype(dt_), y.my.astype(dt_)
+        pos = rho > 0
+        rs = jnp.where(pos, rho, 1.0)
+        return State2D(jnp.where(pos, (mx**2 + my**2) / (2 * rs**2), delta_std.rho),
+                       jnp.where(pos, -mx / rs, delta_std.mx),
+                       jnp.where(pos, -my / rs, delta_std.my))
+
+    if ladmm_cfg.jit:
+        x, y, _, info = ladmm_solve_jit(prox_f1, solve_y, A_fn, At_fn, B_fn, b, x0, y0, opts,
+                                        aux=projection_state, check_every=ladmm_cfg.check_every,
+                                        diag_level=ladmm_cfg.diag_level, master_dtype=ladmm_cfg.master_dtype,
+                                        round_x_dtype=ladmm_cfg.round_x_dtype,
+                                        dual_fn=(_dual_from_y if ladmm_cfg.consistent_dual else None))
+    else:
+        x, y, _, info = ladmm_solve(prox_f1, solve_y, A_fn, At_fn, B_fn, b, x0, y0, opts)
 
     return SolveResultNU2D(
         rho_stag=x.rho, mx_stag=x.mx, my_stag=x.my,

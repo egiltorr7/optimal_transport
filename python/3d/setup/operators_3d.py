@@ -72,10 +72,11 @@ def build_operators_3d(problem) -> Operators3D:
     nt, nx, ny, nz = problem.nt, problem.nx, problem.ny, problem.nz
 
     # BC hyperplanes: the operand array with its own axis dropped.
-    zeros_t = jnp.zeros((nx, ny, nz))  # t-wall
-    zeros_x = jnp.zeros((nt, ny, nz))  # x-wall
-    zeros_y = jnp.zeros((nt, nx, nz))  # y-wall
-    zeros_z = jnp.zeros((nt, nx, ny))  # z-wall
+    dtype = problem.rho0.dtype  # float32 problem -> float32 planes (precision.py)
+    zeros_t = jnp.zeros((nx, ny, nz), dtype)  # t-wall
+    zeros_x = jnp.zeros((nt, ny, nz), dtype)  # x-wall
+    zeros_y = jnp.zeros((nt, nx, nz), dtype)  # y-wall
+    zeros_z = jnp.zeros((nt, nx, ny), dtype)  # z-wall
 
     def interp_t_at_phi(in_arr, bc0, bc1):
         node = _node_t(in_arr, bc0, bc1)

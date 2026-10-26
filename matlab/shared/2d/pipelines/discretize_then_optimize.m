@@ -226,6 +226,7 @@ function result = discretize_then_optimize(cfg, problem)
     result.res_x      = info.res_x;
     result.res_y      = info.res_y;
     result.res_primal = info.res_primal;
+    result.res_dual   = info.res_dual;
     result.residual   = info.residual;    % backward compat alias (= res_x)
     result.iters      = info.iters;
     result.converged  = info.converged;

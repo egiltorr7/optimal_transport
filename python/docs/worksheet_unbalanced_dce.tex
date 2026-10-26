@@ -1,0 +1,470 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{tcolorbox}
+\usepackage{listings}
+
+\geometry{margin=1.05in}
+\hypersetup{colorlinks=true, linkcolor=blue!60!black, urlcolor=blue!60!black}
+
+\newcommand{\eps}{\varepsilon}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\dv}{\nabla\cdot}
+\newcommand{\Nc}{\mathcal{N}}
+\setlist[itemize]{leftmargin=1.4em, itemsep=2pt}
+\setlist[enumerate]{leftmargin=1.8em, itemsep=3pt}
+
+\lstset{basicstyle=\ttfamily\small, columns=fullflexible, keepspaces=true,
+        frame=single, framerule=0.3pt, rulecolor=\color{gray!60}, xleftmargin=4pt,
+        breaklines=true, language=Python, showstringspaces=false}
+
+\newcounter{ex}
+\newenvironment{ex}[1]{\refstepcounter{ex}\par\medskip\noindent\textbf{Exercise \theex}\ \ \textit{#1}\par\nopagebreak\smallskip}{\par\medskip}
+\newtcolorbox{codebox}[1]{colback=green!4!white, colframe=green!40!black, title=Code check: \code{#1}, fonttitle=\bfseries\small, boxrule=0.5pt, arc=1pt, left=4pt, right=4pt, top=3pt, bottom=3pt}
+\newtcolorbox{goal}{colback=orange!6!white, colframe=orange!70!black, boxrule=0.5pt, arc=1pt, left=4pt, right=4pt, top=3pt, bottom=3pt}
+\newtcolorbox{physbox}[1]{colback=blue!4!white, colframe=blue!50!black, title=#1, fonttitle=\bfseries\small, boxrule=0.5pt, arc=1pt, left=4pt, right=4pt, top=3pt, bottom=3pt}
+
+\title{Worksheet: the unbalanced solver\\ and the glymphatic DCE-MRI problem}
+\author{Companion to \code{python/optimal\_transport/*\_unbalanced.py},\\
+\code{docs/unbalanced\_1d.md}, and Chen, Benveniste, Tannenbaum, Sci.\ Rep.\ 14 (2024)}
+\date{24 October 2026}
+
+\begin{document}
+\maketitle
+
+\begin{goal}
+\textbf{Goal for today.} Be able to (i) write the unbalanced problem and say what $\delta$
+does, (ii) derive both LADMM subproblems, the prox and the projection, and see that each is
+a one-line change to the balanced code, (iii) say what every symbol means in a rat-brain
+tracer scan and translate urOMT's parameters into ours, (iv) build $\rho_0,\rho_1$ from the
+public data, and (v) know the three edits that port the 1D solver to 3D. Parts A--C are
+pen, paper, and the 1D numpy code (runs on the Mac). Parts D--F are the physics, the data
+recipe, and the GPU plan. Answers in Appendix~\ref{sec:answers}.
+\end{goal}
+
+\section*{Conventions}
+Balanced solver: $\min\iint|m|^2/2\rho$ s.t.\ $\partial_t\rho+\dv m=\eps\Delta\rho$,
+$\rho(0)=\rho_0$, $\rho(1)=\rho_1$, $m\cdot n=0$ on the walls of $[0,1]^d$, $t\in[0,1]$.
+LADMM splitting (\code{pipeline.py}): $x=(\rho,m)$ on the staggered grid, $y=(\rho,m)$ on
+cell centres, constraint $Ax-y=0$ with $A$ the staggered-to-centre interpolation;
+$f_1(x)=\iota_{\rm FP}(x)$ handled by a projection, $f_2(y)=$ KE handled by a pointwise prox.
+Chen et al.\ write $\rho|v|^2$ with no $\tfrac12$ and $\alpha\chi\rho r^2$ for the source;
+we keep our $\tfrac12$ throughout and translate in Part~D.
+
+\section*{Part A. The unbalanced formulation}
+
+\begin{ex}{Write the problem.}
+Add a source $\zeta(t,x)$ to the continuity equation and charge for it with the
+Fisher--Rao cost. Write out
+\[
+  \min_{\rho,m,\zeta}\ \iint\frac{|m|^2}{2\rho}+\frac{\delta^2}{2}\frac{\zeta^2}{\rho}\,dx\,dt
+  \quad\text{s.t.}\quad \partial_t\rho+\dv m-\eps\Delta\rho=\zeta,\ \ \rho(0)=\rho_0,\ \rho(1)=\rho_1,
+\]
+with $\int\rho_0\neq\int\rho_1$ allowed. Introduce the growth rate $g=\zeta/\rho$ and the
+velocity $v=m/\rho$ and rewrite the integrand as $\tfrac12\rho\,(|v|^2+\delta^2g^2)$. What
+are the units of $\delta$? Why must $\delta$ have those units for the two terms to be
+comparable?
+\end{ex}
+
+\begin{ex}{Pure reaction has a closed form.}
+Suppose $\rho_1=c\,\rho_0$ for a constant $c>0$ and $\eps=0$. Guess that the optimum has
+$m\equiv0$ and find the path. With $m=0$ the constraint is $\partial_t\rho=\zeta$, so the cost
+is $\tfrac{\delta^2}{2}\iint(\partial_t\rho)^2/\rho$. Substitute $\rho=\sigma^2$ and minimize
+$2\delta^2\iint(\partial_t\sigma)^2$ pointwise in $x$: show $\sigma$ is linear in $t$, so
+\[
+  \rho_t=\big((1-t)\sqrt{\rho_0}+t\sqrt{\rho_1}\big)^2,\qquad
+  \text{cost}=2\delta^2\!\int\!\big(\sqrt{\rho_1}-\sqrt{\rho_0}\big)^2dx=2\delta^2(\sqrt c-1)^2\!\int\!\rho_0 .
+\]
+This is the Hellinger geodesic. It is test T1 of \code{unbalanced\_1d.md}: for uniform
+$\to2\times$uniform on $[0,1]$ the cost is $2\delta^2(\sqrt2-1)^2$, which with $\delta=0.3$ is
+$0.03088$; the solver hit it to all printed digits in 53 iterations. Why does adding $\eps>0$
+not change this answer when $\rho_0$ is uniform?
+\end{ex}
+
+\begin{ex}{What $\delta$ decides: move or teleport.}
+Two unit-mass lumps a distance $d$ apart, $\eps=0$. Compare the cost of (a) transporting the
+mass, $\tfrac12d^2$, with (b) destroying it in place and recreating it at the target, which
+by Exercise~2 costs $2\delta^2(0-1)^2+2\delta^2(1-0)^2=4\delta^2$. Show the crossover is at
+$d\propto\delta$ and that the true WFR geodesic (which shrinks the mass while moving it) is
+cheaper than both, so the exact crossover is a pure number times $\delta$; the hard limit
+beyond which no transporting path competes is $\pi\delta$. The 1D tests anchor this: T3 with
+gap $0.19>\pi\delta=0.157$ teleports (kinetic energy $5\cdot10^{-6}$), T3$'$ with
+$\pi\delta=0.31>0.19$ transports (kinetic energy $0.0126$, mass dips to $0.56$ mid-way).
+Explain the mass dip in T3$'$ in words.
+\end{ex}
+
+\begin{ex}{Optimality conditions.}
+Introduce a multiplier $\phi(t,x)$ for the constraint and derive, pointwise where $\rho>0$,
+\[
+  v=\nabla\phi,\qquad \delta^2g=\phi\quad\Longrightarrow\quad m=\rho\nabla\phi,\ \ \zeta=\rho\phi/\delta^2 .
+\]
+Conclude the consistency relation $v=\nabla(\delta^2\zeta/\rho)$ between the velocity and the
+growth rate, which is test T5 (median relative error $8\cdot10^{-5}$). What happens to this
+relation as $\delta\to\infty$, and why does that recover the balanced problem (test T4:
+difference to the balanced solver $\propto1/\delta^2$)?
+\end{ex}
+
+\section*{Part B. The two subproblems}
+
+The code's trick is $s:=\delta\zeta$. Then the reaction cost is $s^2/2\rho$ and the
+constraint is $\partial_t\rho+\dv m-\eps\Delta\rho-s/\delta=0$.
+
+\begin{ex}{The prox is the old prox.}
+The $y$-subproblem is, pointwise at each cell,
+\[
+  \min_{\rho,m,s}\ \frac{|m|^2+s^2}{2\rho}+\frac1{2\sigma}\big(|\rho-\bar\rho|^2+|m-\bar m|^2+|s-\bar s|^2\big),
+  \qquad \sigma=1/\gamma .
+\]
+(a) Differentiate in $m$ and in $s$ and show both shrink by the same factor,
+$m=\tfrac{\rho}{\rho+\sigma}\bar m$, $s=\tfrac{\rho}{\rho+\sigma}\bar s$.
+(b) Substitute back, differentiate in $\rho$, and show $\rho$ solves the cubic
+\[
+  \rho^3+(2\sigma-\bar\rho)\rho^2+(\sigma^2-2\sigma\bar\rho)\rho-\sigma\big(\sigma\bar\rho+\tfrac12q^2\big)=0,
+  \qquad q^2=|\bar m|^2+\bar s^2 .
+\]
+(c) Compare with the balanced cubic in \code{prox.py}: the only difference is $q^2$. Why is
+the function $(\rho,m,s)\mapsto(|m|^2+s^2)/2\rho$ convex, and what is it the perspective of?
+(d) Which cost would \emph{not} reduce to this cubic? Give one example (an entropy-type or
+$L^1$ growth penalty) and say what the pointwise solve would become.
+\end{ex}
+
+\begin{codebox}{prox\_unbalanced.py}
+\code{q2 = mx\_c**2 + s\_c**2}; coefficients \code{b = 2*sigma - rho\_c},
+\code{c = sigma**2 - 2*sigma*rho\_c}, \code{d = -sigma*(sigma*rho\_c + 0.5*q2)};
+\code{fac = rho\_new/(rho\_new + sigma)}; \code{s\_new = fac*s\_c}. Match (a), (b). The
+balanced \code{solve\_cubic} is reused unchanged. In 3D, \code{q2} gains \code{my**2 + mz**2}.
+\end{codebox}
+
+\begin{ex}{The projection is the old projection plus a constant.}
+The $x$-subproblem is the Euclidean projection of $(\bar\rho,\bar m,\bar s)$ onto the affine
+set $\{M x=0\}$, $M=[\,A_{\rm FP},\ -I/\delta\,]$, where $A_{\rm FP}(\rho,m)$ is the discrete
+$\partial_t\rho+\dv m-\eps\Delta\rho$ (with $\rho_0,\rho_1$ baked into the time
+differences) and the $-I/\delta$ block acts on $s$.
+(a) Write the projection as $x=\bar x-M^{\!\top}\varphi$ with $MM^{\!\top}\varphi=M\bar x$, and
+show $MM^{\!\top}=A_{\rm FP}A_{\rm FP}^{\!\top}+\delta^{-2}I$.
+(b) Hence the correction is: $(\rho,m)$ get $A_{\rm FP}^{\!\top}\varphi$ exactly as in the
+balanced code, and $s$ gets $s=\bar s+\varphi/\delta$. Check the sign.
+(c) The balanced code solves $A_{\rm FP}A_{\rm FP}^{\!\top}\varphi=f$ by a DCT in space, which
+decouples the spatial modes $k$, followed by one tridiagonal (CN) or ETD system in time per
+mode. Explain why adding $\delta^{-2}I$ adds $\delta^{-2}$ to the diagonal of every one of
+those time systems and changes nothing else.
+(d) The DC mode. For $k=0$ (spatially constant mode) the balanced operator is the Neumann
+Laplacian in time, which is singular: its null vector is the constant in $t$, and solvability
+requires the residual's DC mode to sum to zero over $t$, which is mass conservation. Show
+that $+\delta^{-2}$ makes it regular, and interpret: the total mass at each time slice is now
+a free variable, paid for through $s$.
+\end{ex}
+
+\begin{codebox}{projection\_unbalanced.py}
+\code{inv\_d2 = 1/delta**2} added to \code{D} (interior rows) and to \code{D[0]},
+\code{D[-1]}; \code{dc\_den = problem.lambda\_t[:,0] + inv\_d2}; the residual \code{f} has
+\code{- s/delta}; the DC mode is solved by a DCT in $t$ divided by \code{dc\_den};
+\code{s\_out = s + phi/delta}. Match (a)--(d). Confirm the per-mode off-diagonal \code{e}
+is untouched.
+\end{codebox}
+
+\begin{ex}{Why the LADMM loop itself does not change.}
+The coupling operator $A$ is the interpolation on $(\rho,m)$ and the \emph{identity} on $s$
+(\code{A\_fn}, \code{At\_fn} in \code{pipeline\_unbalanced.py}). Why does this keep
+$\|A\|\le1$, and why does that matter for the step sizes $\gamma,\tau$ and the stopping rule?
+Where does $s$ live on the grid, and why there? (Hint: where does the FP residual live?)
+\end{ex}
+
+\begin{ex}{Cost per iteration.}
+Count arrays and kernels. In $d$ dimensions the balanced state has $1+d$ fields; the
+unbalanced one has $2+d$. The projection does the same DCT and the same batched time solve,
+plus one cheap DC-mode solve. Estimate the relative increase in memory and in elementwise
+work in 3D. Why can the iteration count go \emph{down} (T1: 53 iterations), and in which
+regime does it go up (T3)?
+\end{ex}
+
+\section*{Part C. Code audit checklist (1D)}
+
+\begin{enumerate}
+  \item \code{StateU}: third field \code{s} of shape \code{(nt, nx)} in both $x$ and $y$;
+        \code{norm} includes it. \code{pipeline\_unbalanced.norm\_fn} weights it by
+        $dt\,dx$ like $\rho,m$: is $s$ a density-scale quantity? ($s=\delta\zeta$ has units of
+        $\rho$ times length/time; on the unit box with $\delta\sim1$ it is comparable to $m$.)
+  \item Initial guess: $\rho$ linear in $t$ between $\rho_0,\rho_1$, $m=s=0$. With unequal
+        masses the linear interpolant violates the balanced constraint by a constant-in-$x$
+        amount; which variable absorbs it on the first projection?
+  \item Dual \code{solve\_y}: \code{prox\_ke\_reaction\_cc(z\_hat - delta\_mult/gamma, 1/gamma)}.
+        The name \code{delta\_mult} is the LADMM multiplier, not the WFR $\delta$. Rename
+        mentally.
+  \item Diagnostics returned: \code{ke}, \code{reaction}, \code{mass\_t}. Test T6: the
+        discrete mass balance $\tfrac{d}{dt}\int\rho=\int s/\delta$ holds to $10^{-13}$.
+        Reproduce it from \code{mass\_t} and \code{s\_stag}.
+  \item Run \code{scripts/validate\_unbalanced.py} once and read every printed line against
+        the table in \code{unbalanced\_1d.md}.
+\end{enumerate}
+
+\section*{Part D. What the symbols mean in a rat-brain tracer scan}
+
+\begin{physbox}{{The experiment (Chen et al.\ 2024, Methods; details not stated there are flagged)}}
+A 3-month-old healthy rat, anaesthetized. The MRI contrast agent gadoteric acid (Gd-DOTA) is
+infused into the cerebrospinal fluid, in this lab's protocol via a cannula in the cisterna
+magna at the base of the skull. T1-weighted 3D images are acquired every 5 minutes for 140
+minutes, 29 frames. Gadolinium shortens $T_1$, so the signal rises where tracer is; the
+authors convert each frame to \emph{percent signal change from the pre-injection baseline}
+and treat that as proportional to tracer concentration. The analysis uses every other frame,
+15 inputs 10 minutes apart (repository file names \code{images\_7\_tind\_1} to
+\code{images\_35\_tind\_15}), restricted to a brain mask, on a $56\times106\times51$ grid,
+smoothed (\code{smooth=1} in the run folder). Field strength, voxel size and the mask
+construction are not stated in the paper; read them off the data files. Successive pairs are
+solved in a chain, the interpolated end state of one pair seeding the next.
+\end{physbox}
+
+\begin{ex}{Dictionary.}
+Fill in what each of our symbols is in the scan, then compare with the answers.
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+ours & in the scan & caution \\
+\midrule
+$\rho(t,x)$ & \rule{3.2cm}{0.3pt} & linear in Gd only at low concentration \\
+$\int\rho\,dx$ & \rule{3.2cm}{0.3pt} & arbitrary units; only the \emph{ratio} $M_1/M_0$ is physical \\
+$v=m/\rho$ & \rule{3.2cm}{0.3pt} & \\
+$\eps$ & \rule{3.2cm}{0.3pt} & see Exercise~\ref{ex:eps} \\
+$\zeta=\rho g$, $g>0$ & \rule{3.2cm}{0.3pt} & \\
+$g<0$ & \rule{3.2cm}{0.3pt} & \\
+$\delta$ & \rule{3.2cm}{0.3pt} & \\
+$t\in[0,1]$ & \rule{3.2cm}{0.3pt} & \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{ex}
+
+\begin{ex}{urOMT to ours: the source.}
+Their model: $\partial_t\rho+\dv(\rho v)=\sigma\Delta\rho+\chi\rho r$ with cost
+$\int\!\!\int\rho|v|^2+\alpha\chi\rho r^2$, no $\tfrac12$, $\chi\in\{0,1\}$ an indicator
+of where sources are allowed, $\chi\equiv1$ for the rat. Match $\zeta=\chi\rho r$, $g=r$ where
+$\chi=1$, and show that dividing their integrand by $2$ gives ours with
+\[
+  \delta^2=\alpha\qquad\text{(in their units, voxels}^2\text{)}.
+\]
+Now nondimensionalize. Their grid has $\Delta x=1$ voxel and a pair of frames spans
+$T=m\,\Delta t=10\times0.4=4$ time units. Rescaling $x\to x/L$, $t\to t/T$ with $L$ the box
+side in voxels, show $v\to vT/L$, $g\to gT$, and hence
+\[
+  \delta_{\rm ours}=\sqrt{\alpha}/L .
+\]
+Evaluate for the rat ($\alpha=10^4$, $L=106$, the longest axis) and for the spheres
+($\alpha=9000$, $L=50$). Which regime of Exercise~3 is this? What does that say about how
+the optimizer will use the source: to teleport mass across the brain, or to adjust mass
+locally where $\rho$ is already large?
+\end{ex}
+
+\begin{ex}{urOMT to ours: the diffusion, and is it physical?}
+\label{ex:eps}
+Their $\sigma=0.002$ voxel$^2$ per time unit. Show $\eps_{\rm ours}=\sigma T/L^2$ and
+evaluate for $L=106$ and $L=50$. Then put units back. Assume a voxel of $0.3$~mm (typical for
+this lab's $9.4$~T rat protocol; confirm from the data) and one time unit $=10\,\mathrm{min}/4=150$~s.
+Convert $\sigma$ to mm$^2$/s. Compare with the free diffusivity of Gd-DOTA in water at body
+temperature, about $4\cdot10^{-4}$~mm$^2$/s, reduced by tissue tortuosity to roughly
+$1.5\cdot10^{-4}$~mm$^2$/s. By what factor is their $\sigma$ below the physical value? Finally
+compute the \emph{physical} $\eps$ for one 10-minute pair on the $L=106$ crop. Is it inside the
+range the 3D suite has already run ($10^{-3}$) and the 2D suite ($10^{-3}$ to $10^{-1}$)?
+Which of the two values would you run, and why both?
+\end{ex}
+
+\begin{ex}{Where mass comes and goes.}
+Over a 10-minute pair the total tracer in the field of view changes because (a) tracer is
+still arriving from the infusion site, (b) tracer leaves along perineural and meningeal
+lymphatic routes out of the field of view and is cleared to blood, (c) the signal-to-
+concentration map saturates at high concentration near the injection site, so early frames
+\emph{under}count mass there, (d) noise and partial volume. Which of these is a genuine
+source $\zeta$ in the sense of the model, and which is a measurement artefact the model will
+nevertheless absorb into $\zeta$? Given the Fisher--Rao cost $\zeta^2/\rho$, where will the
+optimizer prefer to place mass gain and loss, and does that match the paper's observation of
+early $r>0$ in CSF spaces and later $r<0$ along the skull base?
+\end{ex}
+
+\begin{ex}{Hard endpoint versus their free endpoint.}
+They solve with $\rho(0)=\rho_0^{\rm img}$ fixed and a penalty $\beta\|\rho(T)-\rho_1^{\rm img}\|^2$,
+with $\beta=50$ for the rat (versus $5000$ for the clean spheres). We impose
+$\rho(1)=\rho_1$ exactly. (a) With a small $\beta$ their end state may differ visibly from
+the image; with ours the image's noise is imposed exactly and must be produced by $v$ and
+$\zeta$. Which quantity absorbs pixel noise in our formulation, and at what cost scale (use
+$\zeta^2/\rho$ with $\zeta\sim$ noise, $\rho\sim$ local level)? (b) Argue that smoothing
+$\rho_0,\rho_1$ with the same kernel is the cheap substitute for a soft endpoint. (c) What
+would a soft endpoint change in our LADMM: the prox, the projection, or the coupling? (Only
+the terminal row of $A_{\rm FP}$: $\rho_1$ becomes an unknown with a quadratic penalty, so
+the time systems get a modified last row. It is not part of today.)
+\end{ex}
+
+\section*{Part E. Setting up $\rho_0$ and $\rho_1$}
+
+\begin{enumerate}
+  \item \textbf{Pick the pair.} Two consecutive inputs, 10 minutes apart. Start where the
+        mass change is clearly nonzero and the geometry is simple: an early pair (tracer
+        entering, $M_1>M_0$) and a late pair (clearance, $M_1<M_0$). Record $M_0,M_1$ in the
+        data's units before doing anything else.
+  \item \textbf{Values.} Percent signal change, masked to the brain. Clip negatives to zero
+        (noise below baseline), then add a floor of $10^{-3}$ of the peak inside the mask and a
+        smaller floor outside it, so the density is strictly positive everywhere on the box.
+        The prox tolerates $\rho\to0$, but the hard endpoint with $\rho_1=0$ where $\rho_0>0$
+        forces that mass to be destroyed, which is a real statement; make it only inside the
+        mask.
+  \item \textbf{Smoothing.} One Gaussian pass, same kernel on both frames, width about one
+        voxel; this is what their \code{smooth=1} does. It is also the substitute for their
+        soft endpoint (Exercise~15).
+  \item \textbf{Geometry.} The crop is $56\times106\times51$ voxels, isotropic. Our 3D setup
+        takes separate $n_x,n_y,n_z$ but one side length $L$, so unequal counts would stretch
+        the voxels. Pad the volume with the outside floor to a cube of $106^3$ voxels, or
+        downsample by two to $28\times53\times26$ and pad to $56^3$ (or $64^3$) for the first
+        run. Padding with near-zero density costs nothing in transport and keeps the Neumann
+        walls away from the tracer. Their boundary is also a Neumann box, not the brain surface.
+  \item \textbf{Scale.} Divide both frames by $M_0$ so that $\sum\rho_0\,dV=1$ and
+        $\sum\rho_1\,dV=M_1/M_0$. The mass ratio is the physical content; the overall scale
+        sets the density peak, which sets $\gamma$ (the balanced 2D/3D runs want
+        $\gamma\approx0.1$ at peaks of order $10$--$60$). Do \emph{not} renormalize $\rho_1$ to
+        unit mass: that is exactly what the balanced code does and what the unbalanced model
+        exists to avoid.
+  \item \textbf{Parameters.} $\delta=\sqrt\alpha/L$ and $\eps=\sigma T/L^2$ from Exercises~12
+        and~13 with $L$ the padded cube side in voxels, so the first run reproduces their
+        setting; then $\eps_{\rm phys}$ as a second run.
+  \item \textbf{Conversion back.} Velocity in voxels/min $=v\,L/T_{\rm min}$ with
+        $T_{\rm min}=10$; multiply by the voxel size for mm/min. Growth rate in 1/min $=g/T_{\rm min}$;
+        their $r$-map is our $s/(\delta\rho)$ averaged over $t$.
+\end{enumerate}
+
+\begin{ex}{Sanity numbers before the run.}
+From $\rho_0,\rho_1$ alone, compute: $M_1/M_0$; the Hellinger cost $2\delta^2\!\int(\sqrt{\rho_1}-\sqrt{\rho_0})^2$
+(the cost of pure reaction, an upper bound on the optimum); the balanced $W_2$ cost of the
+renormalized pair from a cheap Sinkhorn or from the solver's balanced mode (roughly the
+transport part). Their ratio tells you in advance whether this pair is reaction-dominated or
+transport-dominated at the chosen $\delta$. Also compute the mass fraction within two voxels
+of the box walls after padding; it should be below $10^{-4}$.
+\end{ex}
+
+\section*{Part F. Porting to 3D and running today}
+
+The same three edits as in 1D, in \code{3d/setup/}; nothing in the DCT structure, the jitted
+loop or the mixed-precision path changes.
+\begin{enumerate}
+  \item \code{state\_3d.py}: add field \code{s} of shape \code{(nt, nx, ny, nz)} to the state
+        (both copies), include it in the norm and the arithmetic.
+  \item \code{prox\_3d.py}: \code{q2 = mx**2 + my**2 + mz**2 + s**2} (on the cell-centre copy),
+        shrink \code{s} by the same factor as the momenta.
+  \item \code{projection\_expsemi\_3d.py} (and \code{projection\_3d.py} if the CN path is
+        kept): add \code{1/delta**2} to the diagonal of the per-mode time system in
+        \code{precomp}, replace the DC-mode special case by the regular solve with
+        \code{lambda\_t + 1/delta**2}, subtract \code{s/delta} in the residual, add
+        \code{phi/delta} to \code{s} in the output. The ETD coefficients are unchanged.
+  \item \code{pipeline\_3d.py}: \code{A\_fn}/\code{At\_fn} identity on \code{s}; initial
+        \code{s = 0}; return \code{ke}, \code{reaction}, \code{mass\_t}.
+  \item \textbf{Tests before data}, in this order, at $32^3$ then $48^3$: T1 uniform
+        $\to2\times$uniform with $\eps=0.01$, $\delta=0.3$ (cost $2\delta^2(\sqrt2-1)^2$, exact for
+        any $\eps$, converges in tens of iterations); T4 equal-mass Gaussians with
+        $\delta=0.5,1,2,4$ against the balanced solver (difference $\propto1/\delta^2$); T6
+        mass balance to machine precision. These three take minutes and catch every sign.
+  \item \textbf{Spheres.} Their synthetic case is public: five frames of a translating,
+        diffusing Gaussian on $50^3$ with mass factor $(1+a_i\chi_i)$, $a=(0,0.1,0.2,0.1,0)$,
+        $\chi_i$ a radius-1.5 ball around the centre. Run pair $0\to2$ with $\delta=\sqrt{9000}/50$,
+        $\eps=3.2\cdot10^{-6}$ (their setting; the solver has run $10^{-3}$ at $96^3$ and the
+        1D code handles $\eps=0$, so expect no difficulty) and compare the mass curve
+        \code{mass\_t} with $(1+a_i)$ and the location of $\zeta>0$ with the ball. Note their
+        blur per frame, std $(i+1)\sqrt{0.2}$ voxels, is far more than $2\sigma T$ accounts for;
+        the unbalanced solver will spend some of its source on that mismatch.
+  \item \textbf{Rat pair.} One early and one late pair as in Part~E, at the padded $56^3$
+        first. Report $M_1/M_0$, kinetic and reaction energies, the mass curve, a
+        time-averaged $g$ map alongside their Fig.\ (early $r>0$ in CSF, later $r<0$ at the
+        skull base), and a speed map. Then $106^3$ in \code{mixedc} precision if time allows.
+  \item \textbf{Write-up.} State the two parameter translations with their numbers, the hard
+        versus soft endpoint difference, the padding, and that $\eps$ at their value is a
+        regularizer while $\eps_{\rm phys}$ is $10^2$ larger; give the mass curves and energy
+        split for both $\eps$ values.
+\end{enumerate}
+
+\appendix
+\section{Answers and hints}
+\label{sec:answers}
+
+\paragraph{Ex.\ 1.} $v$ has units length/time, $g$ has units 1/time, so $\delta$ is a length.
+The metric $ds^2=|v|^2+\delta^2g^2$ needs a length to compare moving mass with changing it.
+
+\paragraph{Ex.\ 2.} With $\rho=\sigma^2$, $(\partial_t\rho)^2/\rho=4(\partial_t\sigma)^2$, and
+$\int_0^1(\partial_t\sigma)^2dt$ with fixed endpoints is minimized by the straight line. Uniform
+$\rho_0$ stays uniform, so $\Delta\rho=0$ and the diffusion term never acts.
+
+\paragraph{Ex.\ 3.} Naive crossover $\tfrac12d^2=4\delta^2$, $d=2\sqrt2\,\delta$. The exact
+geodesic shrinks mass while moving it and recreates it on arrival, with cost
+$\propto\delta^2(1-\cos(d/2\delta))$, finite only for $d<\pi\delta$; beyond that the geodesic
+is pure teleport. In T3$'$ the optimizer does exactly that: destroys part of the mass at the
+start, moves the rest, and regrows it at the target, so the total mass dips in the middle.
+
+\paragraph{Ex.\ 4.} Lagrangian $\iint\tfrac12\rho(|v|^2+\delta^2g^2)-\phi(\partial_t\rho+\dv(\rho v)-\eps\Delta\rho-\rho g)$;
+vary $v$: $\rho v=\rho\nabla\phi$; vary $g$: $\delta^2\rho g=\rho\phi$. So
+$\phi=\delta^2\zeta/\rho$ and $v=\nabla\phi$. As $\delta\to\infty$ with $\phi$ fixed,
+$\zeta=\rho\phi/\delta^2\to0$: the source is switched off and the constraint becomes the
+balanced one, with error $O(1/\delta^2)$.
+
+\paragraph{Ex.\ 5.} (a) $m/\rho+(m-\bar m)/\sigma=0\Rightarrow m=\bar m\rho/(\rho+\sigma)$, same
+for $s$. (b) Substituting, the $m,s$ part of the objective becomes $q^2/(2(\rho+\sigma))$;
+differentiating $q^2/2(\rho+\sigma)+(\rho-\bar\rho)^2/2\sigma$ in $\rho$ and clearing
+denominators gives the cubic. (c) It is the perspective of $\tfrac12|(m,s)|^2$, jointly
+convex in $(\rho,m,s)$ because the perspective of a convex function is convex. (d)
+$\rho\,h(\zeta/\rho)$ with $h(g)=g\log g-g+1$ or $|g|$: the $s$-stationarity is no longer
+linear, so a scalar Newton iteration per cell replaces Cardano.
+
+\paragraph{Ex.\ 6.} (a) $MM^{\!\top}=A_{\rm FP}A_{\rm FP}^{\!\top}+(1/\delta)^2I$ because the
+$s$ block of $M$ is $-I/\delta$. (b) $x=\bar x-M^{\!\top}\varphi$: the $s$ component of
+$M^{\!\top}\varphi$ is $-\varphi/\delta$, so $s=\bar s+\varphi/\delta$. (c) The DCT
+diagonalizes the spatial part; $\delta^{-2}I$ is already diagonal in every basis and
+commutes with everything, so it lands on the diagonal of each mode's time system. (d) The
+Neumann time Laplacian has eigenvalues $\lambda_t\ge0$ with one zero; $\lambda_t+\delta^{-2}>0$.
+The DC component of the residual is the mass defect per time slice, and it is now absorbed
+by $s$ instead of being required to vanish.
+
+\paragraph{Ex.\ 7.} $A$ is block diagonal with an interpolation block of norm $\le1$ and an
+identity block of norm $1$. LADMM convergence needs $\tau\ge\gamma\|A\|^2$; with $\|A\|\le1$
+the balanced choice $\tau=1.01\gamma$ still works. $s$ sits on cell centres in $t$ and $x$
+because that is where the FP residual is evaluated, so the constraint couples them without
+interpolation.
+
+\paragraph{Ex.\ 8.} 3D: $5$ fields instead of $4$, so about $+25\%$ memory for the state and
+the same fraction in the prox and residual; the projection's DCT and time solves are
+unchanged in count. Iterations fall when the DC mode was the slow mode (it is now regular);
+they rise when $\delta$ is small enough that teleporting is optimal, since the problem then
+has flat directions in where exactly the mass dies and is reborn.
+
+\paragraph{Ex.\ 11.} $\rho$: tracer concentration proxy (percent signal change), masked.
+$\int\rho$: total tracer in the field of view. $v$: bulk cerebrospinal-fluid flow along
+perivascular spaces, the quantity their pathlines draw. $\eps$: tracer diffusivity in
+tissue (Exercise~13 says theirs is far below physical). $g>0$: tracer arriving, from the
+infusion or from outside the field of view, or apparent gain from signal saturation
+relaxing. $g<0$: clearance to lymphatics and blood, tracer leaving the field of view.
+$\delta$: the distance beyond which it is cheaper to clear and re-inject than to move;
+$\sqrt\alpha=100$ voxels for the rat. $t\in[0,1]$: the 10 minutes between the two frames.
+
+\paragraph{Ex.\ 12.} $\tfrac12(\rho|v|^2+\alpha\rho r^2)=\tfrac12\rho(|v|^2+\delta^2g^2)$ with
+$\delta^2=\alpha$. Under $x'=x/L$, $t'=t/T$: $v'=vT/L$, $g'=gT$, so
+$|v|^2+\alpha g^2=(L/T)^2(|v'|^2+(\alpha/L^2)g'^2)$ and $\delta'=\sqrt\alpha/L$. Rat:
+$100/106=0.94$; spheres: $94.9/50=1.90$. Both are about one box length, so $\pi\delta$
+exceeds the brain: the source will never teleport mass across the domain; it adjusts the
+total locally, preferring places where $\rho$ is large because the cost is $\zeta^2/\rho$.
+
+\paragraph{Ex.\ 13.} $\eps=\sigma T/L^2$: $0.002\cdot4/106^2=7.1\cdot10^{-7}$ and
+$0.002\cdot4/50^2=3.2\cdot10^{-6}$. Units: $0.002\,\text{voxel}^2/150\,\text{s}\times0.09\,\text{mm}^2/\text{voxel}^2=1.2\cdot10^{-6}$~mm$^2$/s,
+about $100\times$ below the tissue diffusivity of Gd-DOTA. Physical:
+$\eps=D\,T/L^2=1.5\cdot10^{-4}\cdot600/(106\cdot0.3)^2\approx9\cdot10^{-5}$, so $\sim10^{-4}$,
+inside the ranges already run. Run both: theirs to compare with their maps, the physical
+one because it is the value the paper's own ``$\eps$ is tracer diffusivity'' claim implies.
+
+\paragraph{Ex.\ 14.} (a) and (b) are genuine sources at the scale of the model (mass crossing
+the field-of-view boundary or the blood--CSF barrier); (c) and (d) are artefacts that the
+model will still book as $\zeta$. The Fisher--Rao cost favours gain and loss where $\rho$ is
+large, i.e.\ in the bright CSF spaces, consistent with their maps.
+
+\paragraph{Ex.\ 15.} (a) $\zeta$ absorbs it: pixel noise of amplitude $\eta$ on a level $\rho$
+costs $\sim\delta^2\eta^2/\rho$ per cell per unit time, cheap where $\rho$ is large and
+expensive in dim tissue, so noise in dim regions is instead transported in from neighbours.
+(b) Smoothing both frames with one kernel removes the component that a soft endpoint would
+have ignored, without changing the solver. (c) Only the terminal row of the constraint.
+
+\end{document}

@@ -35,8 +35,11 @@ def main():
     problem = setup_problem_2d(prob_gaussian_2d(sigma=0.12), nt=nt, nx=nx, ny=ny)
     problem.ops = build_operators_2d(problem)
 
-    bp = precomp_banded_proj_2d(problem, vareps)
-    ladmm_cfg = LadmmConfig(gamma=gamma, tau=gamma * (101.0 / 100.0), max_iter=40_000, eps_abs=1e-10, eps_rel=1e-8)
+    # "dct" per-mode solver (DCT-in-t + rank-2 Woodbury, fully parallel) and
+    # the jitted LADMM loop: see setup/projection_2d.py and setup/ladmm_jit.py.
+    bp = precomp_banded_proj_2d(problem, vareps, method="dct")
+    ladmm_cfg = LadmmConfig(gamma=gamma, tau=gamma * (101.0 / 100.0), max_iter=40_000, eps_abs=1e-10, eps_rel=1e-8,
+                            jit=True, check_every=10)
 
     print(
         f"Running SB Gaussian 2D: nt={nt} nx={nx} ny={ny} gamma={ladmm_cfg.gamma:g} "

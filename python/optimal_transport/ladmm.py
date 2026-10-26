@@ -227,7 +227,17 @@ def ladmm_solve(
         if opts.delta_ref is not None:
             diff = delta - opts.delta_ref
             if opts.delta_mask is not None:
-                diff = State(diff.rho * opts.delta_mask.rho, diff.mx * opts.delta_mask.mx)
+                # Field-wise via __dataclass_fields__, as in ladmm_reordered.py/
+                # ladmm_linesearch.py/alia.py, so this honours the duck-typing
+                # note above rather than contradicting it. The hardcoded
+                # `State(diff.rho * mask.rho, diff.mx * mask.mx)` form it replaces
+                # named the 1D class explicitly: handed a State2D/State3D it
+                # silently DOWNGRADED it to a two-field State, dropping my/mz, and
+                # the only thing that caught it was norm_fn tripping over the
+                # missing attribute one line later. A norm_fn reading just rho/mx
+                # would have returned a quietly wrong err_delta instead.
+                diff = type(diff)(*(getattr(diff, f) * getattr(opts.delta_mask, f)
+                                    for f in diff.__dataclass_fields__))
             err_delta_hist[t] = norm_fn(diff)
 
         # --- "primal residual" P^k ---

@@ -44,9 +44,10 @@ def build_operators_nu_2d(problem) -> Operators2D:
     nt, nx, ny = problem.nt, problem.nx, problem.ny
     dt_vec = problem.dt_vec[:, None, None]  # (nt,1,1), broadcasts against (nt,nx,ny) etc.
 
-    zeros_x = jnp.zeros((nt, ny))  # x-wall BC plane
-    zeros_y = jnp.zeros((nt, nx))  # y-wall BC plane
-    zeros_t = jnp.zeros((nx, ny))  # t-wall BC plane
+    dtype = problem.rho0.dtype  # float32 problem -> float32 planes (precision.py)
+    zeros_x = jnp.zeros((nt, ny), dtype)  # x-wall BC plane
+    zeros_y = jnp.zeros((nt, nx), dtype)  # y-wall BC plane
+    zeros_t = jnp.zeros((nx, ny), dtype)  # t-wall BC plane
 
     def interp_t_at_phi(in_arr, bc0, bc1):
         node = _node_t(in_arr, bc0, bc1)

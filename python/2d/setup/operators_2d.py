@@ -64,9 +64,10 @@ def build_operators_2d(problem) -> Operators2D:
     dt, dx, dy = problem.dt, problem.dx, problem.dy
     nt, nx, ny = problem.nt, problem.nx, problem.ny
 
-    zeros_x = jnp.zeros((nt, ny))  # x-wall BC plane: in_arr with the x axis dropped
-    zeros_y = jnp.zeros((nt, nx))  # y-wall BC plane: in_arr with the y axis dropped
-    zeros_t = jnp.zeros((nx, ny))  # t-wall BC plane: in_arr with the t axis dropped
+    dtype = problem.rho0.dtype  # float32 problem -> float32 planes (precision.py)
+    zeros_x = jnp.zeros((nt, ny), dtype)  # x-wall BC plane: in_arr with the x axis dropped
+    zeros_y = jnp.zeros((nt, nx), dtype)  # y-wall BC plane: in_arr with the y axis dropped
+    zeros_t = jnp.zeros((nx, ny), dtype)  # t-wall BC plane: in_arr with the t axis dropped
 
     def interp_t_at_phi(in_arr, bc0, bc1):
         node = _node_t(in_arr, bc0, bc1)

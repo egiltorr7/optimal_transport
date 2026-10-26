@@ -30,18 +30,30 @@ def normal_pdf_3d(
 
 
 def prob_gaussian_3d(
-    mu0: tuple[float, float, float] = (0.35, 0.35, 0.35),
-    mu1: tuple[float, float, float] = (0.65, 0.65, 0.65),
-    sigma: float = 0.1,
+    mu0: tuple[float, float, float] = (0.4, 0.4, 0.4),
+    mu1: tuple[float, float, float] = (0.6, 0.6, 0.6),
+    sigma: float = 0.08,
 ) -> ProblemDef3D:
     """Transport an isotropic 3D Gaussian from mu0 to mu1 on [0,1]^3.
 
-    Defaults mirror prob_gaussian_2d's. Note the same caveat as in 2D: with
-    sigma=0.1 and these means, the Gaussians are not fully boundary-free on
-    [0,1]^3 at small vareps -- the tails are clipped at the walls, so the
-    discrete marginals differ slightly from the continuous ones and the
-    closed-form reference below picks up a corresponding O(tail) floor.
-    Pass a smaller sigma (or means nearer the centre) to shrink it.
+    These defaults deliberately differ from prob_gaussian_2d's (0.35/0.65,
+    sigma=0.1): they are chosen to be *boundary-free*, and that turns out to
+    matter more than cross-dimension parity.
+
+    analytical_sb_gaussian_3d below is the free-space SB solution, which does
+    not satisfy the no-flux walls the discretization imposes. The size of
+    that mismatch is set by how much Gaussian mass reaches the wall, and it
+    puts a floor under every comparison against the reference -- one that
+    grid refinement cannot cross. With 2D's defaults the peak density at the
+    wall is ~2e-2 of the peak, and the reference's discrete FP residual
+    stalls at ~5e-2 and then *rises* past n=32 (measured; the same happens in
+    2D, so it is a property of the test problem, not of either port). Moving
+    the means in to 0.4/0.6 and narrowing sigma to 0.08 drops the wall
+    density to ~1e-4 and restores clean O(h^2): residual 6.9e-2 -> 1.9e-2 ->
+    4.7e-3 at n=16,32,64, i.e. rates 3.7 and 3.9.
+
+    So: keep sigma small enough, and the means central enough, that the tails
+    die before the wall. scripts/validate_3d.py checks exactly this.
     """
     return ProblemDef3D(
         name="gaussian",

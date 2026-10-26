@@ -312,7 +312,7 @@ def test_analytical_is_fp_feasible():
     the solver -- test_analytical below can only ever tell us that solver
     and reference agree, not that either is right.
     """
-    vareps, sigma = 0.05, 0.08
+    vareps, sigma = 0.02, 0.08  # boundary-free; see prob_gaussian_3d
     prev = None
     for n in (8, 16, 32):
         p = setup_problem_3d(prob_gaussian_3d(sigma=sigma), nt=n, nx=n, ny=n, nz=n)
@@ -326,7 +326,7 @@ def test_analytical_is_fp_feasible():
             check(f"analytical FP residual n={n}", rel < 0.1, f"rel={rel:.3e}")
         else:
             rate = prev / rel
-            check(f"analytical FP residual n={n} (2nd order)", rate > 2.5,
+            check(f"analytical FP residual n={n} (2nd order)", rate > 3.4,
                   f"rel={rel:.3e}, dropped {rate:.2f}x (expect ~4x)")
         prev = rel
 
@@ -335,9 +335,9 @@ def test_analytical_is_fp_feasible():
 # 7. vs the closed-form 3D Schrodinger bridge
 # --------------------------------------------------------------------------
 def test_analytical():
-    nt, nx, ny, nz = 12, 12, 12, 12
-    vareps = 0.1
-    p = setup_problem_3d(prob_gaussian_3d(sigma=0.12), nt=nt, nx=nx, ny=ny, nz=nz)
+    nt, nx, ny, nz = 16, 16, 16, 16
+    vareps = 0.02  # with prob_gaussian_3d's boundary-free defaults
+    p = setup_problem_3d(prob_gaussian_3d(), nt=nt, nx=nx, ny=ny, nz=nz)
     p.ops = build_operators_3d(p)
     bp = precomp_banded_proj_3d(p, vareps)
     res = discretize_then_optimize_3d(
@@ -348,8 +348,10 @@ def test_analytical():
     for nm, got, want in [("rho", res.rho_stag, rho_a), ("mx", res.mx_stag, mx_a),
                           ("my", res.my_stag, my_a), ("mz", res.mz_stag, mz_a)]:
         e = float(np.linalg.norm(np.asarray(got) - np.asarray(want)) / np.linalg.norm(np.asarray(want)))
-        # Coarse grid + clipped Gaussian tails -- this is a sanity bound, not
-        # a convergence test (see scripts/sb_gaussian_3d.py for refinement).
+        # A coarse-grid sanity bound, not a convergence test: at n=16 the
+        # reference's own discretization error is already ~7e-2 (see
+        # test_analytical_is_fp_feasible), so this cannot be tightened
+        # without refining. scripts/sb_gaussian_3d.py --nx 32 refines.
         check(f"analytical SB {nm}", e < 0.1, f"rel err={e:.3e}  (iters={res.info.iters})")
 
 

@@ -30,7 +30,8 @@ def analytical_sb_gaussian_nu(problem, vareps: float):
     alpha = np.sqrt(sigma**4 + vareps**2) - sigma**2
 
     t_rho = problem.t_edges[1:-1][:, None]              # (ntm, 1)
-    x_rho = ((np.arange(1, nx + 1) - 0.5) * dx)[None, :]  # (1, nx)
+    x0 = getattr(problem, "x_min", 0.0)                   # domain offset
+    x_rho = (x0 + (np.arange(1, nx + 1) - 0.5) * dx)[None, :]  # (1, nx)
 
     mu_t = (1 - t_rho) * mu0 + t_rho * mu1
     sig2_t = sigma**2 + 2 * alpha * t_rho * (1 - t_rho)
@@ -39,7 +40,7 @@ def analytical_sb_gaussian_nu(problem, vareps: float):
     rho_ana = rho_ana / (rho_ana.sum(axis=1, keepdims=True) * dx)
 
     t_mx = problem.t_centers[:, None]                    # (nt, 1)
-    x_mx = (np.arange(1, nxm + 1) * dx)[None, :]          # (1, nxm)
+    x_mx = (x0 + np.arange(1, nxm + 1) * dx)[None, :]     # (1, nxm)
 
     mu_t_mx = (1 - t_mx) * mu0 + t_mx * mu1
     sig2_t_mx = sigma**2 + 2 * alpha * t_mx * (1 - t_mx)

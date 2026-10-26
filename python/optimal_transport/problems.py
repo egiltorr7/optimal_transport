@@ -83,7 +83,8 @@ def analytical_sb_gaussian(problem, vareps: float):
 
     # --- rho: times k*dt (k=1..ntm), positions (i-0.5)*dx ---
     t_rho = (np.arange(1, ntm + 1) * dt)[:, None]           # (ntm, 1)
-    x_rho = ((np.arange(1, nx + 1) - 0.5) * dx)[None, :]    # (1, nx)
+    x0 = getattr(problem, "x_min", 0.0)                     # domain offset
+    x_rho = (x0 + (np.arange(1, nx + 1) - 0.5) * dx)[None, :]  # (1, nx)
 
     mu_t = (1 - t_rho) * mu0 + t_rho * mu1
     sig2_t = sigma**2 + 2 * alpha * t_rho * (1 - t_rho)
@@ -93,7 +94,7 @@ def analytical_sb_gaussian(problem, vareps: float):
 
     # --- mx: times (k-0.5)*dt (k=1..nt), positions j*dx ---
     t_mx = ((np.arange(1, nt + 1) - 0.5) * dt)[:, None]     # (nt, 1)
-    x_mx = (np.arange(1, nxm + 1) * dx)[None, :]            # (1, nxm)
+    x_mx = (x0 + np.arange(1, nxm + 1) * dx)[None, :]       # (1, nxm)
 
     mu_t_mx = (1 - t_mx) * mu0 + t_mx * mu1
     sig2_t_mx = sigma**2 + 2 * alpha * t_mx * (1 - t_mx)

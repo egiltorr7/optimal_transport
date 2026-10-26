@@ -1,0 +1,1106 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{tcolorbox}
+
+\geometry{margin=1.1in}
+\hypersetup{colorlinks=true, linkcolor=blue!60!black, urlcolor=blue!60!black, citecolor=blue!60!black}
+
+\newcommand{\eps}{\varepsilon}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\tr}{\operatorname{Tr}}
+\newcommand{\dv}{\nabla\cdot}
+\newcommand{\KL}{\operatorname{KL}}
+\newcommand{\Pc}{\mathcal{P}}
+\newcommand{\Nc}{\mathcal{N}}
+\newcommand{\Kc}{\mathcal{K}}
+\newcommand{\hphi}{\hat\varphi}
+\newcommand{\ind}{\mathbf{1}}
+\setlist[itemize]{leftmargin=1.4em, itemsep=2pt}
+\setlist[enumerate]{leftmargin=1.8em, itemsep=2pt}
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+\newtheorem{example}[definition]{Example}
+\newtheorem{remark}[definition]{Remark}
+\theoremstyle{plain}
+\newtheorem{lemma}[definition]{Lemma}
+\newtheorem{proposition}[definition]{Proposition}
+
+\newtcolorbox{readbox}{colback=blue!4!white, colframe=blue!50!black, title=Reading Gushchin et al., fonttitle=\bfseries, boxrule=0.5pt, arc=1pt, left=4pt, right=4pt, top=3pt, bottom=3pt}
+\newtcolorbox{keybox}{colback=orange!6!white, colframe=orange!70!black, boxrule=0.5pt, arc=1pt, left=4pt, right=4pt, top=3pt, bottom=3pt}
+
+\title{A Primer on Entropic Optimal Transport\\ and the Schr\"odinger Bridge}
+\author{Optimal Transport / Schr\"odinger Bridge Project\\
+Companion to \code{python/shared/mixture\_sb.py} and \code{paper\_route\_sb.py}}
+\date{20 October 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent This note builds, from scratch, the probabilistic vocabulary needed to read
+Gushchin et al., \emph{Building the Bridge of Schr\"odinger} (NeurIPS 2023,
+arXiv:2306.10161), Sections 2--3, and to see why our closed-form mixture reference is exact.
+Each section introduces only what the next one needs: measures and random variables,
+couplings and conditional distributions, entropy, the three optimal transport problems
+(Monge, Kantorovich, entropic), weak OT, Brownian motion and the heat kernel, the
+Schr\"odinger bridge and its two potentials, and finally the ``choose the potential''
+construction. Worked examples are one-dimensional Gaussians, where every object is a
+number. Boxes titled \emph{Reading Gushchin et al.} say which paragraph of the paper each
+piece unlocks.
+\end{abstract}
+
+\tableofcontents
+
+\section{Conventions used throughout}
+\label{sec:conv}
+
+Three quantities are written differently in every source. Fix them once.
+\begin{itemize}
+  \item The noise level of the stochastic process is $\sigma^2$: the reference process is
+        $dX_t=\sigma\,dW_t$, i.e.\ Brownian motion with variance $\sigma^2 t$ per coordinate.
+  \item Our solver's constraint is $\partial_t\rho+\dv m=\eps\Delta\rho$. Its Fokker--Planck
+        equation (Section~\ref{sec:bm}) forces
+        \[
+          \eps=\tfrac12\sigma^2 .
+        \]
+  \item Gushchin et al.\ call $\sigma^2$ simply $\epsilon$; Bunne et al.\ (2023) call it $\sigma^2$;
+        Janati et al.\ (2020) build it into their regularization constant. So \emph{every $\epsilon$
+        in Gushchin's paper is $2\eps$ in our code.} Section~\ref{sec:table} has the full table.
+\end{itemize}
+The spatial domain is $\R^d$ in the theory and $[0,1]^d$ with no-flux walls in the solver;
+Section~\ref{sec:ours} says when the difference matters. The transport cost is always
+$c(x,y)=\tfrac12|x-y|^2$.
+
+\section{Measures, densities, random variables}
+\label{sec:measures}
+
+\begin{definition}[Probability measure, density]
+A probability measure $\mu$ on $\R^d$ assigns to every (measurable) set $A$ a mass
+$\mu(A)\in[0,1]$ with $\mu(\R^d)=1$. When $\mu(A)=\int_A\mu(x)\,dx$ for a nonnegative
+function $\mu(x)$ we say $\mu$ has a density, and we use the same letter for the measure
+and the density. $\Pc(\R^d)$ is the set of probability measures; $\Pc_2(\R^d)$ those
+with finite second moment $\int|x|^2d\mu<\infty$.
+\end{definition}
+
+Everything our grid solver sees is a density ($\rho_0,\rho_1,\rho_t$), but the theory needs
+two measures without densities: the Dirac mass $\delta_a$ (all mass at the point $a$),
+and couplings concentrated on a curve (Section~\ref{sec:couplings}).
+
+\begin{definition}[Random variable, law, expectation]
+A random variable $X$ with values in $\R^d$ has a \emph{law} (or distribution) $\mu$,
+written $X\sim\mu$, meaning $\Prob(X\in A)=\mu(A)$. The expectation of a function of $X$ is
+\[
+  \E[f(X)]=\int f\,d\mu=\int f(x)\,\mu(x)\,dx .
+\]
+\end{definition}
+The notations $\int f\,d\mu$, $\int f(x)\,d\mu(x)$, $\int f(x)\,\mu(dx)$ and $\E_{X\sim\mu}[f(X)]$
+all mean the same thing. A random variable is just a convenient name for ``a point drawn
+from $\mu$''; nothing is random in the formulas, which are all integrals.
+
+\begin{definition}[Pushforward]
+If $X\sim\mu$ and $T:\R^d\to\R^d$, the law of $T(X)$ is the pushforward $T_\#\mu$, defined by
+$(T_\#\mu)(A)=\mu(T^{-1}(A))$. For a smooth invertible $T$ and densities, the change of
+variables formula reads $(T_\#\mu)(T(x))\,|\det\nabla T(x)|=\mu(x)$.
+\end{definition}
+
+\begin{definition}[Gaussians]
+$\Nc(m,\Sigma)$ is the Gaussian with mean $m$ and covariance $\Sigma$; its density at $x$ is
+written $\Nc(x;m,\Sigma)$. In 1D, $\Nc(x;m,s^2)=(2\pi s^2)^{-1/2}e^{-(x-m)^2/2s^2}$.
+\end{definition}
+
+Two Gaussian identities do most of the work later. Both hold in any dimension $d$, with
+$A,B$ symmetric positive-definite $d\times d$ covariance matrices. First, the \emph{product}
+of two Gaussian densities in the same variable is a Gaussian density times a constant:
+\begin{equation}
+  \label{eq:gprod}
+  \Nc(y;a,A)\,\Nc(y;b,B)=\Nc(a;b,A+B)\;\Nc(y;m,S),\quad
+  S=(A^{-1}\!+\!B^{-1})^{-1},\ \ m=S\,(A^{-1}a+B^{-1}b).
+\end{equation}
+The new covariance adds \emph{precisions} (inverse covariances), and the new mean is the
+precision-weighted average of the two means. In 1D, with $A=\alpha$, $B=\beta$ scalars, this
+reads $S=\alpha\beta/(\alpha+\beta)$ and $m=(\beta a+\alpha b)/(\alpha+\beta)$. The
+constant $\Nc(a;b,A+B)$ is the integral of the left-hand side over $y$, so it is also an
+instance of the second identity. Second, the \emph{convolution} of two Gaussians adds
+covariances:
+\begin{equation}
+  \label{eq:gconv}
+  \int \Nc(y;x,A)\,\Nc(x;m,B)\,dx=\Nc(y;m,A+B).
+\end{equation}
+Probabilistically, \eqref{eq:gconv} says: if $X\sim\Nc(m,B)$ and, given $X=x$, $Y\sim\Nc(x,A)$,
+then $Y\sim\Nc(m,A+B)$. ``Adding independent Gaussian noise adds variance.''
+
+\begin{definition}[Product measure]
+For $\mu,\nu\in\Pc(\R^d)$, the product $\mu\otimes\nu$ is the measure on $\R^d\times\R^d$
+with density $\mu(x)\nu(y)$. It is the law of a pair $(X,Y)$ with $X\sim\mu$, $Y\sim\nu$
+and $X,Y$ \emph{independent}.
+\end{definition}
+
+\begin{readbox}
+Gushchin's Section 2 opens with $\Pc_2(\R^D)$ and calls the two marginals $P$ and $Q$. Our
+$\rho_0$ is their $P$, our $\rho_1$ is their $Q$. Measures that are ``absolutely continuous''
+are the ones with a density.
+\end{readbox}
+
+\section{Couplings and conditional distributions}
+\label{sec:couplings}
+
+This is the section the rest of the primer stands on.
+
+\begin{definition}[Joint law, marginals, coupling]
+Let $(X,Y)$ be a pair of random vectors. Its \emph{joint law} $\pi\in\Pc(\R^d\times\R^d)$
+has density $\pi(x,y)$. The \emph{marginals} are the laws of $X$ and $Y$ alone,
+\[
+  \pi_0(x)=\int\pi(x,y)\,dy,\qquad \pi_1(y)=\int\pi(x,y)\,dx .
+\]
+$\pi$ is a \emph{coupling} (or transport plan) of $\rho_0$ and $\rho_1$ if $\pi_0=\rho_0$
+and $\pi_1=\rho_1$. The set of all couplings is $\Pi(\rho_0,\rho_1)$.
+\end{definition}
+
+$\Pi(\rho_0,\rho_1)$ is never empty: the product $\rho_0\otimes\rho_1$ is in it. At the
+other extreme, if $T_\#\rho_0=\rho_1$, the pair $(X,T(X))$ with $X\sim\rho_0$ is a coupling
+too. It has no density on $\R^d\times\R^d$: all its mass sits on the graph $\{y=T(x)\}$.
+Such a coupling is called \emph{deterministic}, and it is what the Monge problem optimizes
+over (Section~\ref{sec:ot}). Think of a coupling as a recipe ``take a particle at $x$ and
+send it to $y$'', which may split the mass at $x$ among several $y$.
+
+\begin{definition}[Conditional distribution]
+For a coupling with density, the \emph{conditional distribution of $Y$ given $X=x$} is the
+probability measure on $\R^d$ with density
+\begin{equation}
+  \label{eq:cond}
+  \pi(y\,|\,x)=\frac{\pi(x,y)}{\rho_0(x)} .
+\end{equation}
+It is written $\pi(\cdot\,|\,x)\in\Pc(\R^d)$: for each fixed $x$, a probability measure in
+the variable $y$.
+\end{definition}
+Equation \eqref{eq:cond} is a definition, not a theorem; it is the slice of the joint
+density at $x$, renormalized to unit mass. It is exactly the ``where does the mass at $x$ go''
+recipe above. Three consequences, each used later:
+\begin{enumerate}
+  \item \textbf{Disintegration.} $\pi(x,y)=\rho_0(x)\,\pi(y|x)$. The joint law is the first
+        marginal times the conditional. Books write this as $\pi(dx,dy)=\rho_0(dx)\,\pi(dy|x)$,
+        or $\pi=\rho_0\otimes\pi(\cdot|x)$, which also covers the case without densities.
+  \item \textbf{Second marginal from the first.}
+        \begin{equation}
+          \label{eq:mixture}
+          \rho_1(y)=\int\rho_0(x)\,\pi(y\,|\,x)\,dx .
+        \end{equation}
+        If you know where each $x$ sends its mass, the target is determined. This one line
+        is the entire idea of Gushchin's construction: choose $\rho_0$ and the conditionals,
+        read off $\rho_1$.
+  \item \textbf{Conditional expectation.} $\E[Y\,|\,X=x]=\int y\,\pi(y|x)\,dy$, the mean
+        destination of the mass at $x$. The map $x\mapsto\E[Y|X=x]$ is called the
+        barycentric projection of the plan.
+\end{enumerate}
+A family $x\mapsto\pi(\cdot|x)$ of probability measures is also called a \emph{Markov kernel}
+or \emph{transition kernel}; the words mean ``a conditional distribution for every $x$''.
+
+\begin{example}[Bivariate Gaussian]
+\label{ex:bigauss}
+Let $(X,Y)$ be jointly Gaussian in 1D with means $\mu_0,\mu_1$, variances $a^2,b^2$ and
+covariance $c=\E[(X-\mu_0)(Y-\mu_1)]$. Completing the square in the joint density gives
+\begin{equation}
+  \label{eq:gausscond}
+  \pi(\cdot\,|\,x)=\Nc\!\Big(\mu_1+\frac{c}{a^2}(x-\mu_0),\ \ b^2-\frac{c^2}{a^2}\Big).
+\end{equation}
+The mean destination is affine in $x$; the spread of the destinations is the same for every
+$x$. Two limits: $c=ab$ gives zero conditional variance, so $Y=\mu_1+\frac{b}{a}(X-\mu_0)$
+exactly (a deterministic coupling, the Monge map between the two Gaussians); $c=0$ gives
+$\pi(\cdot|x)=\Nc(\mu_1,b^2)$ for every $x$, the product coupling. The entropic plan between
+Gaussians (Section~\ref{sec:ot}) is this family with $c=C_\sigma$ from Bunne et al.,
+sliding from $ab$ at $\sigma=0$ to $0$ as $\sigma\to\infty$.
+\end{example}
+
+\begin{readbox}
+Gushchin writes a plan as $\pi\in\Pi(P,Q)$ and its conditionals as $\pi(\cdot|x)$, exactly
+as here. Whenever the paper says ``$\pi$ is a mixture of $\pi(\cdot|x)$ over $x\sim P$'' it
+means the disintegration above. Their sampling procedure for $Q$ is \eqref{eq:mixture}
+read as an algorithm: draw $x\sim P$, then $y\sim\pi(\cdot|x)$.
+\end{readbox}
+
+\section{Entropy and Kullback--Leibler divergence}
+\label{sec:entropy}
+
+\begin{definition}[Differential entropy]
+For a density $\mu$, $H(\mu)=-\int\mu\log\mu\,dx$. For a Gaussian,
+$H(\Nc(m,\Sigma))=\tfrac12\log\big((2\pi e)^d\det\Sigma\big)$; in 1D, $H=\tfrac12\log(2\pi e\,s^2)$.
+\end{definition}
+Entropy is large for spread-out densities and goes to $-\infty$ as a density concentrates
+on a point. This is the mechanism by which an entropy term forbids deterministic couplings.
+
+\begin{definition}[KL divergence]
+For probability measures $\mu,\nu$ with densities,
+\[
+  \KL(\mu\,\|\,\nu)=\int\mu(x)\log\frac{\mu(x)}{\nu(x)}\,dx .
+\]
+It is $\ge0$ with equality only when $\mu=\nu$ (Jensen's inequality), it is not symmetric,
+and it is $+\infty$ when $\mu$ puts mass where $\nu$ has none (then $\mu$ is not
+``absolutely continuous'' with respect to $\nu$, written $\mu\not\ll\nu$).
+\end{definition}
+In 1D with equal means, $\KL(\Nc(0,a^2)\|\Nc(0,b^2))=\tfrac12\big(\tfrac{a^2}{b^2}-1-\log\tfrac{a^2}{b^2}\big)$.
+Note $\KL(\mu\|\nu)=-H(\mu)-\int\mu\log\nu$: KL is negative entropy plus a cross term.
+
+\begin{lemma}[KL splits along conditionals]
+\label{lem:chain}
+Let $\pi$ and $\nu$ be two measures on $\R^d\times\R^d$ with the same first marginal
+$\rho_0$. Then
+\[
+  \KL(\pi\,\|\,\nu)=\int\rho_0(x)\,\KL\big(\pi(\cdot|x)\,\big\|\,\nu(\cdot|x)\big)\,dx .
+\]
+\end{lemma}
+\begin{proof}
+Write $\pi(x,y)=\rho_0(x)\pi(y|x)$ and $\nu(x,y)=\rho_0(x)\nu(y|x)$ inside the logarithm;
+the $\rho_0$ factors cancel.
+\end{proof}
+
+The case $\nu=\rho_0\otimes\rho_1$, the independent coupling, is the one entropic OT uses:
+\begin{equation}
+  \label{eq:mi}
+  \KL(\pi\,\|\,\rho_0\otimes\rho_1)=\int\rho_0(x)\,\KL\big(\pi(\cdot|x)\,\|\,\rho_1\big)\,dx
+  = H(\rho_1)-\int\rho_0(x)\,H\big(\pi(\cdot|x)\big)\,dx .
+\end{equation}
+This is the \emph{mutual information} of $(X,Y)$: zero for independent variables, infinite
+for a deterministic coupling (each $\pi(\cdot|x)$ is a Dirac, entropy $-\infty$). For the
+bivariate Gaussian of Example~\ref{ex:bigauss} with correlation $r=c/(ab)$ it equals
+$-\tfrac12\log(1-r^2)$. The second form in \eqref{eq:mi} is what makes entropic OT a
+``weak'' problem in Section~\ref{sec:weak}: for fixed marginals, the only part that depends
+on the plan is the average entropy of the conditionals.
+
+\section{Monge, Kantorovich and entropic optimal transport}
+\label{sec:ot}
+
+\begin{definition}[Monge]
+Given $\rho_0,\rho_1$, minimize $\int\tfrac12|x-T(x)|^2\rho_0(x)\,dx$ over maps $T$ with $T_\#\rho_0=\rho_1$.
+\end{definition}
+
+\begin{definition}[Kantorovich]
+Minimize over couplings instead of maps:
+\[
+  \tfrac12 W_2^2(\rho_0,\rho_1)=\min_{\pi\in\Pi(\rho_0,\rho_1)}\int\!\!\int\tfrac12|x-y|^2\,\pi(x,y)\,dx\,dy
+  =\min_{\pi}\ \E_{(X,Y)\sim\pi}\tfrac12|X-Y|^2 .
+\]
+\end{definition}
+Every map gives a coupling, so Kantorovich's value is at most Monge's; it is a relaxation
+(a ``weaker'' problem in the sense of fewer constraints). Brenier's theorem says that for
+$\rho_0$ with a density the Kantorovich optimum is deterministic, $y=\nabla\psi(x)$ with
+$\psi$ convex, so the two values agree. For Gaussians, $T(x)=\mu_1+A(x-\mu_0)$ with
+$A=\Sigma_0^{-1/2}(\Sigma_0^{1/2}\Sigma_1\Sigma_0^{1/2})^{1/2}\Sigma_0^{-1/2}$ and
+$W_2^2=|\mu_0-\mu_1|^2+\tr\Sigma_0+\tr\Sigma_1-2\tr(\Sigma_0^{1/2}\Sigma_1\Sigma_0^{1/2})^{1/2}$,
+the Bures--Wasserstein distance (Janati et al., Section 2).
+
+\begin{definition}[Entropic OT]
+For $\sigma^2>0$,
+\begin{equation}
+  \label{eq:eot}
+  \mathrm{OT}_{\sigma^2}(\rho_0,\rho_1)=\min_{\pi\in\Pi(\rho_0,\rho_1)}
+  \int\!\!\int\tfrac12|x-y|^2\,d\pi+\sigma^2\,\KL(\pi\,\|\,\rho_0\otimes\rho_1).
+\end{equation}
+\end{definition}
+The penalty rules out deterministic plans (infinite KL) and pulls the plan toward
+independence as $\sigma^2$ grows. Replacing $\KL(\pi\|\rho_0\otimes\rho_1)$ by $-H(\pi)$,
+or by $\KL(\pi\|\text{Lebesgue})$, changes the objective by a constant that depends only
+on $\rho_0,\rho_1$, so all three conventions have the same minimizer. The regularization
+constant depends on how the cost is scaled: with $\tfrac12|x-y|^2$ it is $\sigma^2$ as in
+\eqref{eq:eot}, with $|x-y|^2$ it is $2\sigma^2$ (Janati's convention). Both are chosen so
+that the entropic plan is the one of the Schr\"odinger bridge with noise $\sigma^2$
+(Section~\ref{sec:sb}).
+
+\begin{proposition}[Form of the entropic plan]
+\label{prop:form}
+The minimizer of \eqref{eq:eot} is unique and has the form
+\begin{equation}
+  \label{eq:plan}
+  \pi^*(x,y)=\hphi(x)\,\Kc_{\sigma}(x,y)\,\varphi(y),\qquad
+  \Kc_\sigma(x,y)=\exp\!\Big(-\frac{|x-y|^2}{2\sigma^2}\Big),
+\end{equation}
+for two nonnegative functions $\hphi,\varphi$, the \emph{Schr\"odinger potentials}, which are
+determined (up to $\hphi\to\lambda\hphi$, $\varphi\to\varphi/\lambda$) by the two marginal
+constraints, the \emph{Schr\"odinger system}
+\begin{equation}
+  \label{eq:ssystem}
+  \rho_0(x)=\hphi(x)\int\Kc_\sigma(x,y)\varphi(y)\,dy,\qquad
+  \rho_1(y)=\varphi(y)\int\hphi(x)\Kc_\sigma(x,y)\,dx .
+\end{equation}
+Conversely, any $\pi$ of the form \eqref{eq:plan} that lies in $\Pi(\rho_0,\rho_1)$ is the
+minimizer.
+\end{proposition}
+Where it comes from: the Lagrangian of \eqref{eq:eot} with multipliers $f(x),g(y)$ for the
+two marginal constraints is minimized by
+$\pi^*=\exp\big((f(x)+g(y)-\tfrac12|x-y|^2)/\sigma^2\big)\rho_0(x)\rho_1(y)$; set
+$\hphi=\rho_0e^{f/\sigma^2}$, $\varphi=\rho_1e^{g/\sigma^2}$. Sinkhorn's algorithm is the
+alternating solution of \eqref{eq:ssystem} for $\hphi$ and $\varphi$. The converse is the
+key to Gushchin: \emph{the exponential form plus the right marginals is a certificate of
+optimality}, because the problem is strictly convex and the form is exactly the first-order
+condition.
+
+The conditional distributions of the entropic plan follow from \eqref{eq:cond} and \eqref{eq:ssystem}:
+\begin{equation}
+  \label{eq:condplan}
+  \pi^*(y\,|\,x)=\frac{\Kc_\sigma(x,y)\,\varphi(y)}{\int\Kc_\sigma(x,y')\varphi(y')\,dy'} .
+\end{equation}
+\begin{keybox}
+Read \eqref{eq:condplan} as: \emph{a Gaussian of variance $\sigma^2$ centered at $x$, reweighted by
+$\varphi$, renormalized.} The mass at $x$ spreads out by diffusion and is then attracted to
+where $\varphi$ is large. Only the terminal potential $\varphi$ enters; $\hphi$ is fixed
+afterwards by $\rho_0$. This is the sentence to hold on to while reading Section 3 of the paper.
+\end{keybox}
+
+\begin{example}[Gaussians]
+If $\varphi$ is the exponential of a quadratic, so is $\Kc_\sigma\varphi$, and the
+conditional \eqref{eq:condplan} is Gaussian with a mean affine in $x$: the plan is a bivariate
+Gaussian, i.e.\ Example~\ref{ex:bigauss}. Solving \eqref{eq:ssystem} for the covariance $c$
+in 1D gives the quadratic $c^2+\sigma^2c=a^2b^2$, hence
+$c=C_\sigma=\tfrac12\big(\sqrt{4a^2b^2+\sigma^4}-\sigma^2\big)$. The matrices $D_\sigma$ and
+$C_\sigma$ of Bunne et al.\ are the $d$-dimensional version of this quadratic formula.
+\end{example}
+
+\begin{readbox}
+Section 2 of the paper states entropic OT, remarks that it has a unique minimizer, and
+introduces the potentials. Their $\epsilon$ is our $\sigma^2$. If a formula there carries
+$\exp(-|x-y|^2/2\epsilon)$, that is $\Kc_\sigma$.
+\end{readbox}
+
+\section{Weak optimal transport}
+\label{sec:weak}
+
+Kantorovich's cost is a sum over pairs: $\int c\,d\pi=\int\rho_0(x)\big[\int c(x,y)\pi(y|x)dy\big]dx$.
+The bracket is \emph{linear} in the conditional $\pi(\cdot|x)$. Weak OT (Gozlan, Roberto,
+Samson, Tetali 2017; Backhoff-Veraguas, Beiglb\"ock, Pammer 2019) allows a nonlinear
+dependence.
+
+\begin{definition}[Weak OT]
+Let $C:\R^d\times\Pc(\R^d)\to\R$ be a cost of a point and a probability measure, convex in
+its second argument. The weak OT problem is
+\begin{equation}
+  \label{eq:weak}
+  \min_{\pi\in\Pi(\rho_0,\rho_1)}\int\rho_0(x)\,C\big(x,\pi(\cdot|x)\big)\,dx .
+\end{equation}
+\end{definition}
+If $C(x,\mu)=\int c(x,y)\,d\mu(y)$, this is Kantorovich with cost $c$; nothing changes.
+The word ``weak'' refers to the cost seeing the conditional law only through integrals
+(``weakly''), not to a weakening of constraints. It is a generalization of Kantorovich,
+whereas Kantorovich is a relaxation of Monge.
+
+\begin{proposition}[Entropic OT is weak OT]
+By \eqref{eq:mi}, problem \eqref{eq:eot} equals, up to the constant $\sigma^2H(\rho_1)$,
+problem \eqref{eq:weak} with
+\begin{equation}
+  \label{eq:weakcost}
+  C(x,\mu)=\int\tfrac12|x-y|^2\,d\mu(y)-\sigma^2H(\mu).
+\end{equation}
+\end{proposition}
+The nonlinear part is the entropy of the conditional: the plan pays for sending the mass at
+$x$ to a sharply defined destination.
+
+\begin{lemma}[Gibbs variational principle]
+\label{lem:gibbs}
+For a function $V$ with $\int e^{-V/\sigma^2}<\infty$,
+\[
+  \min_{\mu\in\Pc(\R^d)}\Big\{\int V\,d\mu-\sigma^2H(\mu)\Big\}
+  \quad\text{is attained only at}\quad
+  \mu^*(y)=\frac{e^{-V(y)/\sigma^2}}{\int e^{-V/\sigma^2}} .
+\]
+\end{lemma}
+\begin{proof}
+$\int V d\mu-\sigma^2H(\mu)=\sigma^2\KL(\mu\|\mu^*)-\sigma^2\log\int e^{-V/\sigma^2}$, and
+$\KL\ge0$ with equality only at $\mu=\mu^*$.
+\end{proof}
+
+Weak OT has a dual problem with a single potential $f$ on the target space, and its
+optimality condition is pointwise in $x$:
+\begin{equation}
+  \label{eq:weakopt}
+  \pi^*(\cdot\,|\,x)=\arg\min_{\mu\in\Pc(\R^d)}\Big\{C(x,\mu)-\int f\,d\mu\Big\}
+  \quad\text{for }\rho_0\text{-almost every }x .
+\end{equation}
+For the entropic cost \eqref{eq:weakcost} this is Lemma~\ref{lem:gibbs} with
+$V(y)=\tfrac12|x-y|^2-f(y)$, giving
+\[
+  \pi^*(y|x)\ \propto\ e^{-|x-y|^2/2\sigma^2}\,e^{f(y)/\sigma^2}=\Kc_\sigma(x,y)\,\varphi(y),\qquad \varphi:=e^{f/\sigma^2},
+\]
+which is \eqref{eq:condplan} again. The dual potential of weak OT and the Schr\"odinger
+potential are the same object, $\varphi=e^{f/\sigma^2}$. The marginal constraint
+$\rho_1=\int\rho_0\,\pi^*(\cdot|x)\,dx$ is the equation that determines $f$ when both
+marginals are given. Run backwards, it says: \emph{pick $f$ freely, and $\rho_1$ is whatever
+\eqref{eq:mixture} produces.}
+
+\begin{readbox}
+The weak-OT paragraph of Section 2 is there only to state \eqref{eq:weakopt}: the optimal
+conditional plans are the minimizers of a pointwise problem driven by one potential. If the
+notation $C(x,\mu)$ with a measure as second argument is unfamiliar, it is \eqref{eq:weakcost}.
+\end{readbox}
+
+\section{Brownian motion, SDEs, the heat kernel}
+\label{sec:bm}
+
+\begin{definition}[Brownian motion]
+$W_t$, $t\ge0$, is a Brownian motion in $\R^d$ if $W_0=0$, its paths are continuous, and
+its increments over disjoint intervals are independent with $W_t-W_s\sim\Nc(0,(t-s)I)$.
+\end{definition}
+The process $X_t=x+\sigma W_t$ (``Brownian motion with volatility $\sigma$'', written
+$dX_t=\sigma\,dW_t$) has $X_t\sim\Nc(x,\sigma^2tI)$. Its \emph{transition density}
+\begin{equation}
+  \label{eq:heat}
+  p_t(x,y)=\Nc(y;\,x,\,\sigma^2tI)=(2\pi\sigma^2t)^{-d/2}\exp\!\Big(-\frac{|x-y|^2}{2\sigma^2t}\Big)
+\end{equation}
+is the probability density of being at $y$ at time $t$ having started at $x$. In $y$ it
+solves the heat equation $\partial_tp=\tfrac{\sigma^2}{2}\Delta p$ with $p_0=\delta_x$; the
+same equation holds in $x$ by symmetry. The Gaussian convolution rule \eqref{eq:gconv} is
+the Chapman--Kolmogorov identity $p_{s+t}=\int p_s(x,z)p_t(z,y)\,dz$.
+
+At $t=1$, $p_1(x,y)$ is $\Kc_\sigma(x,y)$ of \eqref{eq:plan} up to the constant
+$(2\pi\sigma^2)^{-d/2}$. \emph{The entropic kernel is the one-step heat kernel.} This is the
+whole reason entropic OT and the Schr\"odinger bridge are the same problem.
+
+\begin{definition}[SDE with drift]
+$dX_t=u(t,X_t)\,dt+\sigma\,dW_t$ describes a particle pushed by the velocity field $u$ and
+jostled by noise. If $X_0\sim\rho_0$, the law $\rho_t$ of $X_t$ solves the Fokker--Planck
+equation
+\begin{equation}
+  \label{eq:fp}
+  \partial_t\rho_t+\dv(\rho_tu)=\tfrac{\sigma^2}{2}\Delta\rho_t .
+\end{equation}
+\end{definition}
+With $m=\rho u$ this is our solver's constraint $\partial_t\rho+\dv m=\eps\Delta\rho$ with
+$\eps=\sigma^2/2$. For $u=0$ it is the heat equation.
+
+\begin{definition}[Path measure, Brownian bridge]
+The law of the whole trajectory $(X_t)_{t\in[0,1]}$ is a probability measure on the space of
+continuous paths; for $dX=\sigma dW$ started from $\rho_0$ it is the \emph{Wiener measure}
+$\mathbb{W}^{\sigma}$. Conditioning Brownian motion on $X_0=x$ and $X_1=y$ gives the
+\emph{Brownian bridge}, a Gaussian process with
+\[
+  X_t\sim\Nc\big((1-t)x+ty,\ \sigma^2t(1-t)I\big).
+\]
+\end{definition}
+The bridge interpolates linearly in the mean and bulges in the middle; the term
+$\sigma^2t(1-t)I$ in Bunne's $\Sigma_t$ formula is this bulge.
+
+\begin{readbox}
+Gushchin's reference process is Brownian motion with volatility $\epsilon$, i.e.\ our
+$\sigma^2=\epsilon$ (equivalently $dX=\sqrt\epsilon\,dW$). The joint law of $(X_0,X_1)$
+under it has density $\rho_0(x)\,p_1(x,y)$, which they write as $P\otimes$ the heat kernel.
+\end{readbox}
+
+\section{The Schr\"odinger bridge}
+\label{sec:sb}
+
+\begin{definition}[Dynamic Schr\"odinger bridge]
+Among all path measures $\mathbb{P}$ whose time-$0$ and time-$1$ marginals are $\rho_0$ and
+$\rho_1$, find the one closest to the Wiener measure:
+\[
+  \min_{\mathbb{P}:\ \mathbb{P}_0=\rho_0,\ \mathbb{P}_1=\rho_1}\ \KL(\mathbb{P}\,\|\,\mathbb{W}^\sigma).
+\]
+\end{definition}
+Interpretation: Brownian particles start distributed as $\rho_0$; we observe that at time
+$1$ they are distributed as $\rho_1$, which is not what diffusion alone would give; the
+bridge is the most likely way this happened. Two reformulations make it computable.
+
+\paragraph{Control form (what our solver computes).}
+If $\mathbb{P}$ is the law of $dX=u\,dt+\sigma\,dW$ with $X_0\sim\rho_0$, Girsanov's theorem gives
+\begin{equation}
+  \label{eq:girsanov}
+  \KL(\mathbb{P}\,\|\,\mathbb{W}^\sigma)=\frac{1}{2\sigma^2}\,\E\int_0^1|u(t,X_t)|^2\,dt
+  =\frac{1}{\sigma^2}\int_0^1\!\!\int\frac{|m|^2}{2\rho_t}\,dx\,dt,\qquad m=\rho_tu .
+\end{equation}
+Minimizing the right-hand side subject to the Fokker--Planck constraint \eqref{eq:fp} with
+$\rho_0,\rho_1$ prescribed is the Benamou--Brenier problem with diffusion,
+\begin{equation}
+  \label{eq:bb}
+  \min_{\rho,m}\int_0^1\!\!\int\frac{|m|^2}{2\rho}\,dx\,dt\quad\text{s.t.}\quad
+  \partial_t\rho+\dv m=\eps\Delta\rho,\ \ \eps=\tfrac12\sigma^2,
+\end{equation}
+which is exactly what the LADMM solver discretizes. The optimal $u$ is the \emph{current}
+velocity of the bridge, and $m$ is its momentum.
+
+\paragraph{Static reduction (what the closed forms use).}
+Any path measure is its joint endpoint law $\pi(x,y)$ times the conditional law of the path
+given the endpoints. Applying Lemma~\ref{lem:chain} on path space,
+\[
+  \KL(\mathbb{P}\|\mathbb{W}^\sigma)=\KL(\pi\,\|\,\rho_0\otimes p_1)+\int\pi(x,y)\,\KL\big(\mathbb{P}(\cdot|x,y)\,\|\,\text{bridge}_{x\to y}\big)\,dx\,dy ,
+\]
+where $\rho_0\otimes p_1$ denotes the density $\rho_0(x)p_1(x,y)$ of the endpoints under
+Wiener measure. The second term is killed by choosing $\mathbb{P}(\cdot|x,y)$ to be the
+Brownian bridge, and the first term equals, up to a constant,
+$\sigma^{-2}\big[\int\tfrac12|x-y|^2d\pi+\sigma^2\KL(\pi\|\rho_0\otimes\rho_1)\big]$, the
+entropic OT objective \eqref{eq:eot}. Hence:
+\begin{keybox}
+The Schr\"odinger bridge is the entropic OT plan $\pi^*$ glued to Brownian bridges:
+draw $(X_0,X_1)\sim\pi^*$, then run a Brownian bridge between them. Its endpoint law is
+$\pi^*$, and its potentials $\hphi,\varphi$ are those of Proposition~\ref{prop:form}.
+\end{keybox}
+
+\paragraph{Potentials in time.}
+Extend the two potentials to all $t\in[0,1]$ by running the heat equation backwards from
+$\varphi$ and forwards from $\hphi$:
+\begin{equation}
+  \label{eq:phit}
+  \varphi_t(x)=\int p_{1-t}(x,y)\,\varphi(y)\,dy,\qquad
+  \hphi_t(y)=\int\hphi(x)\,p_t(x,y)\,dx ,
+\end{equation}
+so $\partial_t\varphi_t=-\tfrac{\sigma^2}{2}\Delta\varphi_t$ with $\varphi_1=\varphi$, and
+$\partial_t\hphi_t=\tfrac{\sigma^2}{2}\Delta\hphi_t$ with $\hphi_0=\hphi$.
+
+\begin{proposition}[Marginals and drift of the bridge]
+\label{prop:bridge}
+With $\varphi_t,\hphi_t$ as in \eqref{eq:phit} (and $p_1$ in place of $\Kc_\sigma$ in
+\eqref{eq:plan}),
+\begin{equation}
+  \label{eq:rhot}
+  \rho_t=\varphi_t\,\hphi_t,\qquad u(t,x)=\sigma^2\nabla\log\varphi_t(x),\qquad
+  m=\rho_tu=\sigma^2\,\hphi_t\nabla\varphi_t .
+\end{equation}
+\end{proposition}
+\begin{proof}[Check]
+At $t=0$, $\varphi_0=\int p_1\varphi$ and $\hphi_0=\hphi$, so $\rho_0=\hphi\varphi_0$ is the
+first Schr\"odinger equation \eqref{eq:ssystem}; similarly at $t=1$. For $0<t<1$, differentiate
+the product: $\partial_t(\varphi_t\hphi_t)=-\tfrac{\sigma^2}{2}\hphi_t\Delta\varphi_t+\tfrac{\sigma^2}{2}\varphi_t\Delta\hphi_t$,
+while $\dv(\rho_tu)=\sigma^2\dv(\hphi_t\nabla\varphi_t)$ and
+$\tfrac{\sigma^2}{2}\Delta(\varphi_t\hphi_t)=\tfrac{\sigma^2}{2}(\hphi_t\Delta\varphi_t+2\nabla\varphi_t\!\cdot\!\nabla\hphi_t+\varphi_t\Delta\hphi_t)$.
+Expanding $\dv(\hphi_t\nabla\varphi_t)=\nabla\hphi_t\!\cdot\!\nabla\varphi_t+\hphi_t\Delta\varphi_t$
+shows that \eqref{eq:fp} holds term by term. So $\rho_t$ is a Fokker--Planck solution with
+the right endpoints and drift $u$, and $\rho_t$ is also the time-$t$ marginal of the
+bridge-glued plan, which is the mixture $\int\pi^*(x,y)\,\Nc(\cdot;(1-t)x+ty,\sigma^2t(1-t))$.
+\end{proof}
+The drift is a gradient of a log: Schr\"odinger bridges are always gradient flows of
+$\log\varphi_t$, in the same way that Brenier maps are gradients of convex functions. In
+our convention $m=2\eps\,\rho_t\nabla\log\varphi_t$.
+
+\begin{readbox}
+This is the ``dynamic SB'' part of Section 2. The paper's $\varphi^*$ and $\hat\varphi^*$
+(or $\phi,\hat\phi$; check the pdf) are our $\varphi,\hphi$; the optimal drift
+$\epsilon\nabla\log\varphi_t$ is \eqref{eq:rhot} with $\epsilon=\sigma^2$. Their statement
+that the optimal process ``is the reference process with an added drift'' is \eqref{eq:girsanov}.
+\end{readbox}
+
+\section{Gushchin's construction: choose the potential}
+\label{sec:gushchin}
+
+Normally $\rho_0,\rho_1$ are given and \eqref{eq:ssystem} must be solved numerically for
+$\hphi,\varphi$. The construction runs this backwards.
+
+\begin{proposition}[Constructed pairs, Gushchin et al.\ Thm.\ 3.2 in substance]
+\label{prop:construct}
+Fix $\rho_0$ and any nonnegative $\varphi$ with $\varphi_0:=\int p_1(\cdot,y)\varphi(y)\,dy$
+finite. Define
+\begin{equation}
+  \label{eq:construct}
+  \hphi:=\frac{\rho_0}{\varphi_0},\qquad
+  \pi^*(y|x):=\frac{p_1(x,y)\varphi(y)}{\varphi_0(x)},\qquad
+  \rho_1(y):=\int\rho_0(x)\,\pi^*(y|x)\,dx=\varphi_1(y)\,\hphi_1(y),
+\end{equation}
+where $\varphi_1=\varphi$ by the definition \eqref{eq:phit}, so that the endpoints read
+$\rho_0=\varphi_0\hphi_0$ and $\rho_1=\varphi_1\hphi_1$, the $t=0$ and $t=1$ cases of \eqref{eq:rhot}.
+Then $\pi^*(x,y)=\rho_0(x)\pi^*(y|x)=\hphi(x)p_1(x,y)\varphi(y)$ is the entropic plan between
+$\rho_0$ and this $\rho_1$, and the Schr\"odinger bridge between them has marginals and
+drift given by \eqref{eq:rhot}.
+\end{proposition}
+\begin{proof}
+$\pi^*$ has the exponential form, its first marginal is $\rho_0$ by construction (the
+conditionals are normalized), and its second marginal is $\rho_1$ by definition. The
+converse part of Proposition~\ref{prop:form} does the rest.
+\end{proof}
+The price is that $\rho_1$ is an output, not an input. The gain is that the drift
+$\sigma^2\nabla\log\varphi_t$ and every $\rho_t$ are exact, with no optimization anywhere.
+
+\paragraph{Gaussian-mixture potentials.}
+Take
+\begin{equation}
+  \label{eq:mixphi}
+  \varphi(y)=\sum_{k=1}^K w_k\,\Nc(y;\mu_k,\Sigma_k),\qquad w_k>0 .
+\end{equation}
+The number of components $K$ and the triples $(w_k,\mu_k,\Sigma_k)$ are \emph{free design
+parameters}, chosen by hand; nothing in the problem fixes them, and they are not the modes and
+covariances of $\rho_1$ (compare $\mu_\pm=\pm a$ with the actual centres $\bar y_\pm$ in
+Example~\ref{ex:1d}). They are the input; the marginals are the output. Gushchin pick theirs
+``to make the constructed distributions visually pleasant'' (their Appendix~B); ours are the
+$(w,b,Q)$ and $(u,a,P)$ arguments of \code{mixture\_sb.py}.
+Gushchin call this an LSE (log-sum-exp) potential because $\log\varphi$ is a log-sum-exp of
+quadratics. Everything becomes explicit through the two Gaussian identities of
+Section~\ref{sec:measures}:
+\begin{itemize}
+  \item \textbf{Time potential.} By the convolution rule \eqref{eq:gconv},
+        $\varphi_t(x)=\sum_kw_k\,\Nc\big(x;\mu_k,\Sigma_k+\sigma^2(1-t)I\big)$:
+        running the heat equation backwards inflates each component's covariance.
+  \item \textbf{Drift.} $u=\sigma^2\nabla\log\varphi_t$ is a weighted average of the Gaussian
+        gradients,
+        \begin{align*}
+          u(t,x)&=-\sigma^2\sum_k\omega_k(t,x)\,\big(\Sigma_k+\sigma^2(1-t)I\big)^{-1}(x-\mu_k),\\
+          \omega_k(t,x)&\propto w_k\,\Nc\big(x;\mu_k,\Sigma_k+\sigma^2(1-t)I\big),
+        \end{align*}
+        with the responsibilities $\omega_k$ summing to one. Each component pulls toward its
+        centre; the pull is strongest where that component dominates.
+  \item \textbf{Conditional plan.} $\pi^*(y|x)\propto\varphi(y)\,\Nc(y;x,\sigma^2I)$ is a
+        mixture of products of two Gaussians in $y$, so by the product rule \eqref{eq:gprod}
+        with $A=\Sigma_k$, $B=\sigma^2I$, i.e.\
+        $S_k=(\Sigma_k^{-1}+\sigma^{-2}I)^{-1}$ and $m_k(x)=S_k(\Sigma_k^{-1}\mu_k+\sigma^{-2}x)$,
+        \begin{equation}
+          \label{eq:mixcond}
+          \pi^*(y|x)=\sum_k\omega_k(0,x)\,\Nc\big(y;m_k(x),S_k\big).
+        \end{equation}
+        The mass at $x$ is split among the $K$ components with $x$-dependent weights, and
+        each part lands in a Gaussian around a point between $x$ and $\mu_k$.
+  \item \textbf{Target.} $\rho_1=\int\rho_0(x)\pi^*(\cdot|x)\,dx$ is sampled by
+        $x\sim\rho_0$, then $y\sim\pi^*(\cdot|x)$ (Gushchin's Prop.\ 3.3). Its density is a
+        $d$-dimensional integral, closed form only when $\rho_0$ is itself Gaussian or a
+        Gaussian mixture, which is the case treated next.
+\end{itemize}
+
+\paragraph{Dictionary: the same objects in the paper's notation.}
+Section~3.3 of the paper looks different from \eqref{eq:mixphi}--\eqref{eq:mixcond} for three
+reasons: they parametrize the \emph{dual} potential $f^*$ rather than the Schr\"odinger potential
+$\varphi$; they write Gaussians \emph{unnormalized}, through
+$Q(y\,|\,b,A):=\exp\!\big(-\tfrac12(y-b)^{\!\top}A\,(y-b)\big)$, a bell of precision $A$ with no
+$(2\pi)^{-D/2}\det^{-1/2}$ in front; and they parametrize each component by its precision
+rather than its covariance. To keep one index, we write their component index $n$ as our $k$,
+their $\epsilon$ as our $\sigma^2$, and their weight $w_n$ as $c_k$, because our $w_k$ is
+already taken. Two of their names clash with ours and mean different things: their
+$\Sigma_n$ and $\mu_n(x)$ are the covariance and mean of the \emph{conditional} plan, our
+$S_k$ and $m_k(x)$, not the component parameters $\Sigma_k,\mu_k$ of \eqref{eq:mixphi}.
+\begin{enumerate}
+  \item \textbf{Dual vs.\ Schr\"odinger potential (their (14), Cor.\ 3.4).} Their conditional
+        plan is $\pi^*(y|x)\propto\exp\big((f^*(y)-\tfrac12|x-y|^2)/\epsilon\big)$. With
+        \[
+          \varphi(y)=\exp\big(f^*(y)/\epsilon\big)
+        \]
+        this is exactly $\Kc_\sigma(x,y)\varphi(y)$, i.e.\ our \eqref{eq:condplan}. Corollary~3.4
+        says precisely this: $\exp(f^*/\epsilon)$ is the Schr\"odinger potential.
+  \item \textbf{The LSE potential (their (15)).}
+        $f^*(y)=\epsilon\log\sum_kc_k\,Q(y|b_k,\epsilon^{-1}A_k)$ exponentiates to
+        \[
+          \varphi(y)=\sum_kc_k\,Q\big(y\,|\,b_k,\epsilon^{-1}A_k\big)
+                   =\sum_kc_k\exp\!\Big(-\tfrac12(y-b_k)^{\!\top}\tfrac{A_k}{\epsilon}(y-b_k)\Big),
+        \]
+        a sum of bells with centres $b_k$ and precisions $A_k/\epsilon$. This is \eqref{eq:mixphi}
+        with
+        \[
+          \mu_k=b_k,\qquad \Sigma_k^{-1}=A_k/\epsilon,\qquad
+          w_k=c_k\,(2\pi)^{D/2}\det(\Sigma_k)^{1/2},
+        \]
+        the last line converting unnormalized bells to normalized densities. Only ratios of the
+        weights matter (an overall factor in $\varphi$ is absorbed into $\hphi$).
+  \item \textbf{Proposition 3.3 is \eqref{eq:mixcond}.} Substituting $\Sigma_k^{-1}=A_k/\epsilon$
+        and $\sigma^{-2}=\epsilon^{-1}$ into our $S_k$, $m_k$:
+        \begin{align*}
+          S_k&=(\Sigma_k^{-1}+\sigma^{-2}I)^{-1}=\epsilon\,(A_k+I)^{-1}
+            &&\text{(their $\Sigma_n$)},\\
+          m_k(x)&=S_k(\Sigma_k^{-1}\mu_k+\sigma^{-2}x)=(A_k+I)^{-1}(A_kb_k+x)
+            &&\text{(their $\mu_n(x)$)}.
+        \end{align*}
+        Their mixture weights are $\gamma_k=\tilde c_k/\sum_j\tilde c_j$ with
+        \[
+          \tilde c_k=c_k\,(2\pi)^{D/2}\det(S_k)^{1/2}\,Q\big(x\,|\,b_k,\ \epsilon^{-1}I-\epsilon^{-2}S_k\big)
+          \qquad\text{(their $\tilde w_n$)},
+        \]
+        and these are our responsibilities $\omega_k(0,x)\propto w_k\Nc(x;\mu_k,\Sigma_k+\sigma^2I)$.
+        To see it, note the precision in their $Q$ is
+        \[
+          \epsilon^{-1}I-\epsilon^{-2}S_k=\epsilon^{-1}(A_k+I)^{-1}A_k
+          =(\epsilon A_k^{-1}+\epsilon I)^{-1}=(\Sigma_k+\sigma^2I)^{-1},
+        \]
+        so $Q(x|b_k,\cdot)$ is the unnormalized version of $\Nc(x;\mu_k,\Sigma_k+\sigma^2I)$; and
+        \[
+          \det(S_k)^{1/2}=\epsilon^{D/2}\det(A_k+I)^{-1/2}
+          \propto\det(\Sigma_k)^{1/2}\det(\Sigma_k+\sigma^2I)^{-1/2}
+        \]
+        supplies exactly the normalizations that turn $c_k$ into $w_k$ and the bell into a
+        density, up to the common factor $(2\pi\epsilon)^{D/2}$ that cancels in $\gamma_k$. Their
+        normalizer $Z_x$ is our $\varphi_0(x)$ up to the same constant. Their appendix derivation
+        (completing the square in the exponent, their (21) and following) is the product rule
+        \eqref{eq:gprod} done by hand.
+  \item \textbf{Corollary 3.5 is the drift of \eqref{eq:rhot}.} Write $S_k^t:=\epsilon\big((1-t)A_k+I\big)^{-1}$
+        (their $\Sigma_n^t$, with $A_n^t=(1-t)A_n$). Their (16) reads
+        \[
+          v^*(x,t)=\epsilon\nabla\log\sum_kc_k\det(S_k^t)^{1/2}\,
+          Q\Big(x\,\Big|\,b_k,\ \tfrac{1}{\epsilon(1-t)}I-\tfrac{1}{\epsilon^2(1-t)}S_k^t\Big).
+        \]
+        The precision simplifies the same way,
+        \[
+          \tfrac{1}{\epsilon(1-t)}\big(I-((1-t)A_k+I)^{-1}\big)=\epsilon^{-1}\big((1-t)A_k+I\big)^{-1}A_k
+          =(\Sigma_k+\sigma^2(1-t)I)^{-1},
+        \]
+        and $\det(S^t_k)^{1/2}$ supplies the normalization, so the sum is $\varphi_t(x)$ of the
+        \textbf{Time potential} bullet and $v^*=\sigma^2\nabla\log\varphi_t=u$. (Their (12) is
+        \eqref{eq:phit}--\eqref{eq:rhot} with the heat kernel written as $\Nc(y|x,(1-t)\epsilon I)$.)
+\end{enumerate}
+Two things in Section~3.3 are \emph{not} just notation. First, they only require the eigenvalues of
+$A_k$ to lie in $(-1,\infty)$, so a component may have $A_k\preceq0$: a flat or even growing
+bell, not a Gaussian. Everything still works because every formula above uses $(A_k+I)^{-1}$,
+never $A_k^{-1}$: the heat kernel's precision $\epsilon^{-1}I$ dominates and $S_k\succ0$.
+Our Gaussian-mixture $\varphi$ is the $A_k\succ0$ sub-case; to cover the rest, read
+$\Sigma_k^{-1}:=A_k/\epsilon$ as the primary object in \eqref{eq:mixcond} and never form
+$\Sigma_k$ itself. Second, Proposition~3.3 produces \emph{samples} of $P_1=\pi^*_1$ and nothing
+else; the paper says explicitly that $P_1$ is in general not a Gaussian mixture even when $P_0$
+is. Section~\ref{sec:ours} gives two recipes that close that gap: Recipe~A follows the paper and adds one convolution; Recipe~B, previewed below, makes everything explicit.
+
+\begin{example}[One-dimensional worked case]
+\label{ex:1d}
+Let $\rho_0=\Nc(0,s^2)$ and $\varphi(y)=\tfrac12\Nc(y;-a,\tau_0^2)+\tfrac12\Nc(y;a,\tau_0^2)$.
+Write $\tau^2=\tau_0^2+\sigma^2$. Then
+\[
+  \varphi_0(x)=\tfrac12\Nc(x;-a,\tau^2)+\tfrac12\Nc(x;a,\tau^2),\qquad
+  \omega_\pm(x)=\frac{\Nc(x;\pm a,\tau^2)}{\Nc(x;-a,\tau^2)+\Nc(x;a,\tau^2)}=\frac{1}{1+e^{\mp2ax/\tau^2}},
+\]
+so a particle at $x>0$ goes to the right branch with probability $\omega_+(x)$ and to the
+left branch with probability $\omega_-(x)=1-\omega_+(x)$ (the ``cross-branch'' mass). Given
+the branch, $y\sim\Nc\big(m_\pm(x),S\big)$ with
+$S=\big(\tau_0^{-2}+\sigma^{-2}\big)^{-1}$ and $m_\pm(x)=S(\pm a/\tau_0^2+x/\sigma^2)$.
+The drift that does the splitting is exact: $u=\sigma^2\partial_x\log\varphi_t$ with
+$\varphi_t=\tfrac12\Nc(x;-a,\tau_0^2+\sigma^2(1-t))+\tfrac12\Nc(x;a,\tau_0^2+\sigma^2(1-t))$.
+With $a=1$, $\tau_0=0.5$, $\sigma^2=0.1$ the cross-branch probability $\omega_-(x)$ is
+about $3\%$ at $x=0.6$ and $0.3\%$ at $x=1$; shrinking $a$ or raising $\sigma^2$ increases it.
+
+The target, however, is \emph{not} closed form here: $\rho_1(y)=\int\rho_0(x)\pi^*(y|x)\,dx$
+contains $\omega_\pm(x)$, whose denominator $\varphi_0(x)$ is a sum of two Gaussians and does
+not cancel against anything. That integral is what Gushchin sample (Prop.\ 3.3). It is also
+what \code{paper\_route\_sb.py} evaluates, not point by point but as $\rho_1=\varphi\,\hphi_1$
+with $\hphi_1$ obtained by one Gaussian convolution of $\hphi=\rho_0/\varphi_0$ on a fine grid,
+which is cheap and spectrally accurate; the ring example of
+\code{candidate\_3d\_problems.tex} is built that way with a $\rho_0$ that is no mixture at all.
+
+\emph{The closed-form variant (ours, not the paper's; Recipe~B of Section~\ref{sec:ours}).}
+The paper route already gives a usable grid reference with one numerical step (Recipe~A). The
+variant here removes that step and makes $\rho_1$ explicit, at the price of a mixture
+$\rho_0$. The obstruction is the denominator
+$\varphi_0$ in $\hphi=\rho_0/\varphi_0$: a Gaussian divided by a sum of Gaussians is not a
+Gaussian, so $\hphi$, $\hphi_1$ and $\rho_1=\varphi\,\hphi_1$ are not mixtures. The second
+Schr\"odinger equation says $\rho_1$ is the \emph{product} $\varphi\,\hphi_1$, and products of
+mixtures are mixtures by \eqref{eq:gprod}. So the fix is to change which two objects are the
+inputs. Gushchin choose $(\rho_0,\varphi)$ and $\hphi$ is forced. We choose $(\hphi,\varphi)$,
+both Gaussian, and \emph{both} marginals are outputs. This is legitimate by the converse in
+Proposition~\ref{prop:form}: $\pi=\hphi\,p_1\,\varphi$ is the entropic-optimal plan between
+its own two marginals, whatever $\hphi,\varphi$ are, provided it has mass one. Concretely, keep
+$\varphi$ as above and take a single Gaussian
+\[
+  \hphi(x)=Z^{-1}\Nc(x;0,\hat s^2),\qquad Z:=\Nc(a;0,\hat s^2+\tau^2),
+\]
+where the role of $Z$ is only to make the total mass one (step 2 below). Four steps:
+\begin{enumerate}
+  \item \textbf{Flow $\varphi$ back to $t=0$.} By \eqref{eq:gconv} each variance grows by
+        $\sigma^2$: $\varphi_0(x)=\tfrac12\Nc(x;-a,\tau^2)+\tfrac12\Nc(x;a,\tau^2)$,
+        $\tau^2=\tau_0^2+\sigma^2$, as before.
+  \item \textbf{Multiply: $\rho_0=\hphi\,\varphi_0$.} Apply \eqref{eq:gprod} term by term
+        with $A=\hat s^2$ (mean $0$) and $B=\tau^2$ (mean $\pm a$):
+        \[
+          \Nc(x;0,\hat s^2)\,\Nc(x;\pm a,\tau^2)
+          =\underbrace{\Nc(\pm a;0,\hat s^2+\tau^2)}_{=\,Z\ \text{for both signs}}\;
+           \Nc(x;\bar x_\pm,v),\qquad
+          \bar x_\pm=\pm\frac{a\,\hat s^2}{\hat s^2+\tau^2},\quad v=\frac{\hat s^2\tau^2}{\hat s^2+\tau^2}.
+        \]
+        The mean is the precision-weighted average of $0$ and $\pm a$; the pull toward the
+        origin is stronger the narrower $\hphi$ is. The two constants are equal by symmetry
+        and equal $Z$ by definition, so $Z^{-1}$ cancels them:
+        \[
+          \rho_0=\tfrac12\Nc(x;\bar x_+,v)+\tfrac12\Nc(x;\bar x_-,v),
+        \]
+        a probability density.
+  \item \textbf{Flow $\hphi$ forward to $t=1$.} $\hphi_1(y)=Z^{-1}\Nc(y;0,\hat s^2+\sigma^2)$.
+  \item \textbf{Multiply: $\rho_1=\varphi\,\hphi_1$.} Same rule with variances $\tau_0^2$
+        and $\hat s^2+\sigma^2$. The constant that appears is
+        $\Nc(a;0,\hat s^2+\sigma^2+\tau_0^2)=Z$, the \emph{same} number, because
+        $\tau^2=\tau_0^2+\sigma^2$. This is not a coincidence: both constants are the total
+        mass of the plan, counted once at $t=0$ and once at $t=1$. Hence
+        \[
+          \rho_1=\tfrac12\Nc(y;\bar y_+,v')+\tfrac12\Nc(y;\bar y_-,v'),\qquad
+          \bar y_\pm=\pm\frac{a(\hat s^2+\sigma^2)}{\hat s^2+\sigma^2+\tau_0^2},\quad
+          v'=\frac{(\hat s^2+\sigma^2)\tau_0^2}{\hat s^2+\sigma^2+\tau_0^2}.
+        \]
+\end{enumerate}
+The picture: the plan $\pi^*$ is two bivariate Gaussians, a $+$ branch and a $-$ branch, each
+of mass exactly $\tfrac12$ at $t=0$ and $t=1$ and hence at every $t$ (Section~\ref{sec:ours}).
+Each branch is a single Gaussian bridge, so $\rho_t$ is always a sum of two Gaussians whose
+centres slide from $\bar x_\pm$ to $\bar y_\pm$ and whose variances go from $v$ to $v'$. At
+$t=0$ the narrow $\hphi$ pulls the centres together and $\rho_0$ is one bump; at $t=1$ the
+broader $\hphi_1$ pulls less and $\rho_1$ is mildly bimodal. The cross-branch weight
+$\omega_\pm(x)$ of the paper route still exists but is never needed: it is already summed
+into the two branch masses. Gushchin's Proposition~3.3 is not replaced, it is bypassed; the
+paper never needs the density of $\rho_1$, the grid solver does.
+With $a=1$, $\hat s=0.3$, $\tau_0=0.5$, $\sigma^2=0.1$:
+$\rho_0$ has centres $\pm0.20$ and standard deviation $0.27$, a single broad bump; $\rho_1$
+has centres $\pm0.43$ and standard deviation $0.33$, a flat-topped, mildly bimodal density.
+\end{example}
+
+\begin{readbox}
+Map of the paper's Section 3 (arXiv v2 numbering). 3.1, Theorem 3.1: the construction for a
+general weak cost. 3.2, Theorem 3.2 with its eq.\ (14): Proposition~\ref{prop:construct}, the
+conditional plan $\propto\exp((f^*-c)/\epsilon)$, i.e.\ \eqref{eq:condplan} with
+$\varphi=e^{f^*/\epsilon}$. 3.3, eq.\ (15): the LSE potential, our \eqref{eq:mixphi};
+Proposition 3.3: the Gaussian-mixture conditionals, our \eqref{eq:mixcond}, used to sample
+$P_1$. 3.4, Corollary 3.4: $e^{f^*/\epsilon}$ is the Schr\"odinger potential; Corollary 3.5,
+eq.\ (16): the drift, our $u=\sigma^2\nabla\log\varphi_t$. The dictionary above translates each
+symbol. Everything from Section 4 on is about the high-dimensional benchmark pairs and neural
+solvers and can be skipped.
+\end{readbox}
+
+\section{Two recipes for an exact grid reference}
+\label{sec:ours}
+
+\paragraph{Why we need a density at all.}
+The paper never evaluates $P_1(y)$ at a point, and never needs to. Its solvers are neural: they
+take two bags of samples $\{x_i\}\sim P_0$, $\{y_j\}\sim P_1$ as input and return a sampler
+(a network producing draws from $\hat\pi(\cdot|x)$, or a learned drift $\hat v$ integrated as an
+SDE); they are scored by sample-based moment metrics (BW$_2^2$-UVP). Proposition~3.3, a fast
+exact sampler, is therefore all they need. Our solver is a grid discretization of
+\eqref{eq:bb}: its input is $\rho_0,\rho_1$ as arrays of cell values, since the marginal
+constraints are imposed pointwise, and its output is $\rho_t,m$ at every cell and time step.
+Histogramming samples onto the grid would inject Monte Carlo noise of order
+$N_{\mathrm{cell}}^{-1/2}$ per cell, far above the $O(h^2)$ discretization error the convergence
+suites are designed to measure; and the error norms of $\rho_t$ and $m$ need the exact
+$\rho_t$ at every cell. So we need $\rho_0$, $\rho_1$, $\rho_t$ and $m$ as functions we can
+evaluate anywhere, to an accuracy well below $10^{-3}$. Two recipes do this. Neither is in
+the paper as such; the first follows it closely, the second departs in one choice.
+
+\paragraph{What both recipes share.}
+Both rest on one fact, the converse in Proposition~\ref{prop:form} (the paper's Theorem~3.2):
+\begin{keybox}
+Take \emph{any} two positive functions $\hphi,\varphi$ on $\R^d$ and set
+$\pi(x,y)=\hphi(x)\,\Kc_\sigma(x,y)\,\varphi(y)$, scaled to total mass one. Then $\pi$ is the
+entropic-optimal plan, and the Schr\"odinger bridge, between its own two marginals. By
+\eqref{eq:phit}--\eqref{eq:rhot} the bridge is
+\[
+  \rho_t=\varphi_t\,\hphi_t,\qquad u=\sigma^2\nabla\log\varphi_t,\qquad m=\rho_tu,
+\]
+with $\varphi_t$ the backward and $\hphi_t$ the forward heat flow of the two chosen functions.
+In particular $\rho_0=\hphi\,\varphi_0$ and $\rho_1=\varphi\,\hphi_1$.
+\end{keybox}
+So a reference consists of six objects: $\varphi$, $\varphi_t$, $\hphi$, $\hphi_t$, $\rho_t$, $u$.
+The two recipes differ only in \emph{which of these are chosen}, \emph{which are forced}, and
+\emph{how the forced ones are computed}. In both, $\varphi$ is the Gaussian mixture
+\eqref{eq:mixphi}, $\varphi=\sum_kw_k\Nc(\cdot;\mu_k,\Sigma_k)$, so that $\varphi_t$ and $u$
+are closed form by the \textbf{Time potential} and \textbf{Drift} bullets of
+Section~\ref{sec:gushchin}. Both scripts use the solver's convention $\sigma^2=2\eps$: wherever
+$\sigma^2$ appears below the code writes \code{2*eps}, and the mixture parameters are the
+arguments \code{(w, b, Q)} for $(w_k,\mu_k,\Sigma_k)$.
+
+\paragraph{Recipe A: the paper route (\code{paper\_route\_sb.py}, class \code{FixedRho0SB}).}
+This is Gushchin's construction, with the one object they never compute added at the end.
+\begin{description}[leftmargin=1.5em,itemsep=2pt]
+  \item[We fix two things.]
+    \begin{enumerate}[itemsep=1pt]
+      \item $\rho_0$: \emph{any} smooth positive density on $[0,1]^d$ that is negligible at the
+            walls, normalized to mass one. It need not be a Gaussian or a mixture; the worked
+            example in \code{candidate\_3d\_problems.tex} uses a ring,
+            $\rho_0\propto\exp(-(|x-c|-r)^2/2w^2)$.
+      \item $\varphi=\sum_kw_k\Nc(\cdot;\mu_k,\Sigma_k)$: the centres, widths and weights of
+            the targets, chosen by hand (Section~\ref{sec:gushchin}). This is the paper's
+            LSE potential $f^*=\sigma^2\log\varphi$.
+    \end{enumerate}
+  \item[Everything else is derived, in this order.]
+    \begin{enumerate}[itemsep=1pt]
+      \item $\varphi_t(x)=\sum_kw_k\Nc\big(x;\mu_k,\Sigma_k+\sigma^2(1-t)I\big)$, by the
+            convolution rule. Closed form. In particular $\varphi_0$, which is also the paper's
+            normalizer $Z_x$ up to a constant.
+      \item $\hphi:=\rho_0/\varphi_0$. \emph{Forced}: this is the only choice that makes the
+            $x$-marginal of $\hphi\Kc_\sigma\varphi$ equal to $\rho_0$ (first Schr\"odinger
+            equation). Pointwise closed form, but not a mixture: for the ring it is a crescent,
+            the side of the ring facing away from the targets, where $\varphi_0$ is smallest.
+            The paper never writes this function down because its sampler never needs it.
+      \item $\hphi_t=\Nc(0,\sigma^2tI)*\hphi$, the forward heat flow. \emph{The one numerical
+            step.} Evaluate $\hphi$ on a fine $n_f^d$ grid; since the solver's cell centres form
+            a tensor grid and the Gaussian kernel is separable, the convolution is
+            $\hphi_t=F\times_1K_x\times_2K_y(\times_3K_z)$, with $F$ the fine-grid values and
+            $K_x$ the $n\times n_f$ matrix of one-dimensional Gaussian weights times the fine
+            cell width. Midpoint quadrature of a smooth Gaussian integrand converges
+            spectrally: in the 2D example, $n_f=256$ is already below $10^{-9}$ relative to the
+            peak at the earliest solver time, $t=1/32$. In 3D this is three tensor contractions,
+            $O(n\,n_f^3)$ per time slice, seconds on a GPU.
+      \item $\rho_t=\varphi_t\,\hphi_t$ and $\rho_1=\varphi\,\hphi_1$. No normalizing constant
+            is needed: $\rho_0$ has mass one by construction and the Fokker--Planck equation
+            conserves mass. $\rho_1$ is a product of a mixture and a numerically known
+            function, so it is not explicit, but it is known at every cell to quadrature
+            accuracy, which is all the solver needs.
+      \item $u=\sigma^2\nabla\log\varphi_t$ from step~1, closed form and independent of
+            $\rho_0$; $m=\rho_tu$.
+      \item (Optional.) The static plan $\pi^*(y|x)=\varphi(y)\Nc(y;x,\sigma^2I)/\varphi_0(x)$,
+            which is the paper's Proposition~3.3 mixture \eqref{eq:mixcond}.
+    \end{enumerate}
+  \item[What is exact and what is not.] Steps 1, 2, 5, 6 are closed form. Step~3 carries
+    quadrature error, below $10^{-9}$ for $n_f\ge256$ in the example. Step~4 inherits it.
+    The only other error is the $\R^d$-versus-box mismatch, bounded by the mass of $\rho_t$
+    outside the walls ($8\cdot10^{-7}$ in the ring example). Both are orders of magnitude
+    below the solver's $O(h^2)$ error.
+  \item[Gain and loss.] Gain: complete freedom in $\rho_0$. Loss: $\rho_1$ has no formula, and
+    there is no branch-mass table. Two practical rules: keep $\rho_0$ smooth on the scale
+    $\sqrt{\sigma^2\,dt}$, the blur at the first time step, or $\hphi$ in step~2 is rough; and
+    choose $\varphi$ so that $\varphi_0$ does not vary by orders of magnitude across the
+    support of $\rho_0$, or $\hphi$ concentrates on a sliver of it (the ring-to-crescent
+    effect, factor $261$ in the example).
+\end{description}
+
+\paragraph{Recipe B: both potentials as mixtures (\code{mixture\_sb.py}, class \code{MixtureSB}).}
+The same construction with step~2 of Recipe~A replaced by a choice, which removes the numerical
+step and makes everything explicit.
+\begin{description}[leftmargin=1.5em,itemsep=2pt]
+  \item[We fix two things, neither of which is a marginal.]
+    \begin{enumerate}[itemsep=1pt]
+      \item $\hphi=\sum_iu_i\Nc(\cdot;a_i,P_i)$: a Gaussian mixture for the \emph{initial}
+            potential, with hand-picked $(u_i,a_i,P_i)$, the code's \code{(u, a, P)}. This
+            replaces ``fix $\rho_0$''. $\rho_0$ is now an output.
+      \item $\varphi=\sum_kw_k\Nc(\cdot;\mu_k,\Sigma_k)$ as in Recipe~A.
+    \end{enumerate}
+  \item[Everything else is derived.]
+    \begin{enumerate}[itemsep=1pt]
+      \item $\varphi_t(x)=\sum_kw_k\Nc\big(x;\mu_k,\Sigma_k+\sigma^2(1-t)I\big)$, as before.
+      \item $\hphi_t(x)=\sum_iu_i\Nc\big(x;a_i,P_i+\sigma^2tI\big)$, by the convolution rule.
+            This is Recipe~A's step~3, now closed form because $\hphi$ is a mixture.
+      \item Mass. The product $\hphi\Kc_\sigma\varphi$ has total mass
+            $K=\sum_{i,k}u_iw_k\,\Nc\big(a_i;\mu_k,P_i+\Sigma_k+\sigma^2I\big)$; divide by it.
+            The normalized summands
+            \[
+              \Omega_{ik}=u_iw_k\,\Nc\big(a_i;\mu_k,P_i+\Sigma_k+\sigma^2I\big)\big/K,
+              \qquad\textstyle\sum_{i,k}\Omega_{ik}=1,
+            \]
+            are the \emph{branch masses}: $\Omega_{ik}$ is the mass of the plan flowing from
+            component $i$ of $\hphi$ to component $k$ of $\varphi$. They do not depend on $t$.
+      \item $\rho_t=\varphi_t\hphi_t/K$. Each term is a product of two Gaussians in the same
+            variable, so by \eqref{eq:gprod} with $A=P_i+\sigma^2tI$ and $B=\Sigma_k+\sigma^2(1-t)I$,
+            \begin{equation}
+              \label{eq:ourrho}
+              \rho_t=\sum_{i,k}\Omega_{ik}\,\Nc\big(\cdot;\,c_{ik}(t),\,C_{ik}(t)\big),
+            \end{equation}
+            with $C_{ik}(t)=\big(A^{-1}+B^{-1}\big)^{-1}$ and
+            $c_{ik}(t)=C_{ik}(t)\big(A^{-1}a_i+B^{-1}\mu_k\big)$.
+            The constants $\Nc(a_i;\mu_k,A+B)$ produced by the product rule are exactly the
+            numerators of $\Omega_{ik}$, since $A+B=P_i+\Sigma_k+\sigma^2I$ for every $t$. This is
+            why the weights are $t$-independent. $\rho_0$ and $\rho_1$ are \eqref{eq:ourrho} at
+            $t=0$ and $t=1$: both are mixtures of $I\!\cdot\!K$ Gaussians with the same weights.
+      \item $u=\sigma^2\nabla\log\varphi_t$, $m=\rho_tu$, as before.
+      \item (Optional.) The static plan $\pi^*(y|x)=\varphi(y)\Nc(y;x,\sigma^2I)/\varphi_0(x)$,
+            unchanged, and the joint plan $\pi^*(x,y)=\sum_{i,k}\Omega_{ik}\times$ one
+            bivariate Gaussian on $\R^{2d}$ per branch.
+    \end{enumerate}
+  \item[Why it all closes.] For one pair $(i,k)$,
+    \[
+      \hphi_i(x)\,\Kc_\sigma(x,y)\,\varphi_k(y)\;\propto\;
+      \exp\!\Big(-\tfrac12\Big[(x-a_i)^{\!\top}P_i^{-1}(x-a_i)
+      +\tfrac{|x-y|^2}{\sigma^2}+(y-\mu_k)^{\!\top}\Sigma_k^{-1}(y-\mu_k)\Big]\Big),
+    \]
+    whose exponent is one quadratic in the stacked vector $(x,y)\in\R^{2d}$. So each branch is a
+    single Gaussian on $\R^{2d}$, the plan is a Gaussian mixture on $\R^{2d}$, and every marginal
+    in $x$, in $y$, or at any intermediate time is a Gaussian mixture with the same weights.
+    Example~\ref{ex:1d} is the $I=1$, $K=2$ case.
+  \item[What is exact.] Everything; nothing is sampled or integrated. Checks recorded in the
+    code and in \code{candidate\_3d\_problems.tex}: \eqref{eq:ourrho} equals the product
+    $\varphi_t\hphi_t/K$ to $10^{-15}$; $\rho_1$ equals $\int\rho_0\pi^*(\cdot|x)\,dx$ by
+    quadrature to $3\cdot10^{-13}$; the finite-difference Fokker--Planck residual decays as
+    $O(h^2)$; and $I=K=1$ reproduces the Gaussian closed form of Bunne et al.
+  \item[Gain and loss.] Gain: no numerical step, explicit $\rho_1$, and a branch-mass table
+    $\Omega_{ik}$ that says in advance how much mass goes where. Loss: $\rho_0$ is a mixture
+    of $I\!\cdot\!K$ Gaussians, not a free choice; a single-Gaussian $\rho_0$ with a
+    multimodal $\rho_1$ is impossible here unless $K=1$. In the 1D example the two components of
+    $\rho_0$ sit so close that it looks like one bump.
+\end{description}
+
+\paragraph{Side by side.}
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+ & Recipe A (paper route) & Recipe B (both mixtures) \\
+\midrule
+chosen & $\rho_0$ (anything smooth), $\varphi$ (mixture) & $\hphi$ (mixture), $\varphi$ (mixture) \\
+forced & $\hphi=\rho_0/\varphi_0$ & $\rho_0=\hphi\varphi_0/K$ \\
+$\hphi_t$ & one Gaussian convolution, $\le10^{-9}$ & closed form \\
+$\rho_1$ & numerical product, no formula & mixture, \eqref{eq:ourrho} at $t=1$ \\
+$\rho_t$, $u$, $m$ & product and closed form & closed form \\
+branch masses & not available & $\Omega_{ik}$, explicit \\
+use when & a specific non-mixture $\rho_0$ is wanted & an all-explicit multimodal test is wanted \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{What the solver is compared against.}
+In the solver's convention, with $\eps=\sigma^2/2$:
+\begin{itemize}
+  \item $\rho_t$ on cell centres, from \eqref{eq:ourrho} (B) or from step~4 (A);
+  \item $m=2\eps\,\hphi_t\nabla\varphi_t$ on the staggered faces (\code{staggered\_reference}
+        in both classes evaluates at exactly the solver's points, so no interpolation);
+  \item the cost $\int_0^1\!\!\int|m|^2/2\rho$, which by \eqref{eq:girsanov} equals
+        $\sigma^2\KL(\mathbb{P}^*\|\mathbb{W}^\sigma)$; it is evaluated by quadrature of the
+        reference on a fine grid, not by a formula of the Bunne type.
+\end{itemize}
+
+\paragraph{What this can and cannot do, and what is the paper's.}
+The pair $(\rho_0,\rho_1)$ produced by Recipe~B is always two Gaussian mixtures, but a
+\emph{derived} pair: shared weights $\Omega_{ik}$, means and covariances tied by
+\eqref{eq:ourrho}. Given two arbitrary Gaussian mixtures, the bridge between them is not closed
+form (the potentials are not mixtures), and neither recipe solves it. Both are generators of
+test pairs with an exact solution, which is what a convergence study needs and what the paper
+itself set out to build. From the paper we use three things: the idea of choosing the
+potential and reading off the pair, which is what gives a multimodal bridge with an exact
+answer at all (the single-Gaussian references of Bunne and Janati are the $I=K=1$ corner);
+Theorem~3.2 as the citable optimality and uniqueness statement (the underlying fact is the
+classical Schr\"odinger system); and the LSE formulas of Proposition~3.3 and Corollary~3.5,
+which after the dictionary are \eqref{eq:mixcond} and the drift we evaluate. We do not use
+the sampler, Theorem~3.1, or the benchmark pairs. Recipe~A adds the forward heat flow of
+$\hphi$, which the paper never needs; Recipe~B adds the choice of $\hphi$ as a mixture.
+Theorem~3.2 never required $P_0$ to be prescribed; the paper fixed it because they wanted a
+given dataset or a clean Gaussian at $t=0$. Both recipes could be derived from the
+Schr\"odinger system and the two Gaussian identities alone; citing the paper buys the
+recognized framing and the theorem.
+
+\paragraph{Boundary conditions.}
+Every formula above is on $\R^d$. The solver lives on $[0,1]^d$ with no-flux walls, whose
+reference process is \emph{reflected} Brownian motion and whose heat kernel is the Neumann
+kernel, a cosine series rather than \eqref{eq:heat}. The references remain valid as long as
+$\rho_t$ carries negligible mass at the walls for all $t$ (tail mass $\lesssim10^{-7}$ in the
+examples), because then the two kernels agree to that accuracy on the support. The same
+caveat applies to the Gaussian closed form of Bunne et al.
+
+\section{Symbol table and reading map}
+\label{sec:table}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{3.9cm}p{3.1cm}p{3.0cm}p{3.6cm}@{}}
+\toprule
+Object & This primer & Gushchin et al.\ (check pdf) & Our code \\
+\midrule
+noise of reference process & $\sigma^2$ & $\epsilon$ & $2\eps$ \\
+Fokker--Planck diffusion & $\sigma^2/2$ & $\epsilon/2$ & $\eps$ \\
+EOT regularization, cost $\tfrac12|x-y|^2$ & $\sigma^2$ & $\epsilon$ & $2\eps$ \\
+EOT regularization, cost $|x-y|^2$ (Janati) & $2\sigma^2$ & -- & $4\eps$ \\
+source, target & $\rho_0,\rho_1$ & $P,Q$ & \code{rho0, rho1} \\
+plan, conditionals & $\pi^*$, $\pi^*(\cdot|x)$ & $\pi^*$, $\pi^*(\cdot|x)$ & static plan \\
+dual potential & $f=\epsilon\log\varphi$ (unused) & $f^*$ & -- \\
+mixture component & $\Nc(\cdot;\mu_k,\Sigma_k)$, weight $w_k$ & $Q(\cdot|b_n,\epsilon^{-1}A_n)$, weight $w_n$ ($=c_k$ in the dictionary) & \code{(w,b,Q)}, \code{(u,a,P)} \\
+conditional covariance, mean & $S_k$, $m_k(x)$ & $\Sigma_n=\epsilon(A_n+I)^{-1}$, $\mu_n(x)$ & -- \\
+responsibilities & $\omega_k(t,x)$ & $\gamma_n$ (at $t=0$) & -- \\
+potentials & $\hphi,\varphi$ & $\tilde\varphi^*,\ \varphi^*=e^{f^*/\epsilon}$ & \code{phihat, phi} \\
+heat / entropic kernel & $p_1=\Nc(y;x,\sigma^2I)$ & $\exp(-|x-y|^2/2\epsilon)$ & -- \\
+time-$t$ marginal & $\rho_t=\varphi_t\hphi_t$ & same & \code{rho(t)} on centres \\
+drift, momentum & $u=\sigma^2\nabla\log\varphi_t$, $m=\rho u$ & $\epsilon\nabla\log\varphi_t$ & $m=2\eps\hphi_t\nabla\varphi_t$ on faces \\
+dynamic cost & $\int\!\!\int|m|^2/2\rho=\sigma^2\KL(\mathbb{P}^*\|\mathbb{W}^\sigma)$ & $\epsilon\,\KL(\cdot\,\|\,W^\epsilon)$ & LADMM objective \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Reading map for Gushchin et al., Sections 2--3.}
+\begin{enumerate}
+  \item Section 2, entropic OT and weak OT: Sections~\ref{sec:couplings}--\ref{sec:weak} here.
+        Goal: recognize \eqref{eq:eot}, \eqref{eq:plan} and the pointwise condition \eqref{eq:weakopt}.
+  \item Section 2, dynamic Schr\"odinger bridge: Sections~\ref{sec:bm}--\ref{sec:sb}.
+        Goal: $\rho_t=\varphi_t\hphi_t$ and drift $\epsilon\nabla\log\varphi_t$.
+  \item Section 3.1, Theorem 3.2 and the drift display: Proposition~\ref{prop:construct}.
+  \item Proposition 3.3 and Corollary 3.5: \eqref{eq:mixcond} and Example~\ref{ex:1d}.
+  \item Stop there. Sections 4--6 are the benchmark and neural solvers.
+\end{enumerate}
+
+\paragraph{Further reading, in order of usefulness.}
+L\'eonard, \emph{A survey of the Schr\"odinger problem and some of its connections with
+optimal transport}, DCDS-A 34 (2014), arXiv:1308.0215, Sections 1--3, for the dynamic/static
+reduction and the potentials; Peyr\'e \& Cuturi, \emph{Computational Optimal Transport},
+Chapter 4, for entropic OT and Sinkhorn; Chen, Georgiou, Pavon, \emph{Stochastic control
+liaisons}, SIAM Review 63 (2021), for the control form \eqref{eq:girsanov}; Bunne et al.,
+AISTATS 2023, Theorem 3, and Janati et al., NeurIPS 2020, Theorem 1, for the Gaussian
+closed forms used in Section~\ref{sec:ot}.
+
+\end{document}

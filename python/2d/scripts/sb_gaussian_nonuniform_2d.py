@@ -119,6 +119,7 @@ from setup.pipeline_nu_2d import LadmmConfig, discretize_then_optimize_nu_2d
 from setup.problems_2d import prob_gaussian_2d
 from setup.problems_nu_2d import analytical_sb_gaussian_nu_2d
 from setup.projection_nu_2d import precomp_banded_proj_nu_2d, proj_fokker_planck_banded_nu_2d
+from setup.state_2d import State2D
 from setup.time_grid import (
     clustered_time_grid,
     graded_ends_time_grid,
@@ -218,6 +219,15 @@ def parse_args():
     p.add_argument("--eps-rel", type=float, default=EPS_REL)
     p.add_argument("--n-snapshots", type=int, default=N_SNAPSHOTS)
     p.add_argument("--tag", default="", help="extra suffix on the output filenames")
+    # Solver dispatch (setup/ladmm_jit.py). jit is on by default: on a GH200 the
+    # eager loop costs ~200-365 ms/iter of pure dispatch overhead at ANY grid
+    # size, the compiled loop ~1-4 ms/iter at 128^3. --no-jit gets the eager
+    # ladmm.py loop back for comparison.
+    p.add_argument("--no-jit", dest="jit", action="store_false", default=True)
+    p.add_argument("--check-every", type=int, default=10,
+                   help="jit: iterations per compiled call; the stop is detected up to this many late")
+    p.add_argument("--diag", choices=("full", "stopping"), default="full",
+                   help="jit: 'stopping' skips the dx/dy/dz histories (fewer reductions per iteration)")
     return p.parse_args()
 
 
@@ -319,15 +329,26 @@ def main():
           f"x64={_PRE.x64}  plotting={'on' if DO_PLOT else 'off'}  "
           f"CUDA_VISIBLE_DEVICES={_os.environ.get('CUDA_VISIBLE_DEVICES', '<unset>')}")
     cfg = LadmmConfig(gamma=args.gamma, tau=tau, max_iter=args.max_iter,
-                      eps_abs=args.eps_abs, eps_rel=args.eps_rel)
+                      eps_abs=args.eps_abs, eps_rel=args.eps_rel,
+                      jit=args.jit, check_every=args.check_every, diag_level=args.diag)
+    # The closed form is computed BEFORE the solve so it can be tracked as
+    # x_ref: info.err_x is then ||x^k - x_ana|| at every iteration, which is
+    # what tells a still-converging run from one that has stalled.
+    rho_ana, mx_ana, my_ana = analytical_sb_gaussian_nu_2d(problem, args.vareps)
+    x_ref = State2D(rho_ana, mx_ana, my_ana)
     result = discretize_then_optimize_nu_2d(
-        problem, proj_fokker_planck_banded_nu_2d, bp, args.vareps, cfg)
+        problem, proj_fokker_planck_banded_nu_2d, bp, args.vareps, cfg, x_ref=x_ref)
 
     info = result.info
     print(f"iters={info.iters} converged={info.converged} walltime={info.walltime:.2f}s "
-          f"({info.walltime / max(info.iters, 1) * 1000:.3f} ms/iter)")
-
-    rho_ana, mx_ana, my_ana = analytical_sb_gaussian_nu_2d(problem, args.vareps)
+          f"({info.walltime / max(info.iters, 1) * 1000:.3f} ms/iter incl. "
+          f"{info.walltime_first_chunk:.2f}s compile; jit={args.jit})")
+    _e = info.err_x
+    _marks = [k for k in (100, 1000, 5000, 10000, 20000, 50000, 100000) if k <= info.iters]
+    print("err_x (weighted L2 vs closed form) at iters " +
+          ", ".join(f"{k}: {_e[k - 1]:.3e}" for k in _marks) + f", last: {_e[-1]:.3e}")
+    print(f"final D={info.D[-1]:.3e} (tol {args.eps_abs + args.eps_rel * info.scale_D[-1]:.1e})  "
+          f"P={info.P[-1]:.3e} (tol {args.eps_abs + args.eps_rel * info.scale_P[-1]:.1e})")
     rho_num = np.asarray(result.rho_stag)
     rho_ana = np.asarray(rho_ana)
 
@@ -381,6 +402,9 @@ def main():
         snapshot_idx=np.asarray(idx), nt=problem.nt, nx=problem.nx, ny=problem.ny,
         dx=problem.dx, dy=problem.dy, sigma=args.sigma, mu0=args.mu0, mu1=args.mu1,
         converged=info.converged, walltime=info.walltime, backend=BACKEND,
+        gamma=args.gamma, tau=tau,
+        err_x=info.err_x, D_hist=info.D, P_hist=info.P,
+        scale_D=info.scale_D, scale_P=info.scale_P,
         gpu_id=(-1 if _PRE.gpu_id is None else _PRE.gpu_id),
         x64=_PRE.x64, D=np.asarray(info.D), P=np.asarray(info.P),
     )

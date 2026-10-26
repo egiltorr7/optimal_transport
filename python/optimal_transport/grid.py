@@ -21,7 +21,8 @@ class Problem:
     dt: float
     dx: float
     L: float
-    xx: np.ndarray          # (nx,) cell-center spatial coordinates on [0, L]
+    x_min: float            # left edge of the domain; the grid spans [x_min, x_min+L]
+    xx: np.ndarray          # (nx,) cell-center spatial coordinates
     rho0: np.ndarray        # (nx,) discrete probability density, sum(rho0)*dx == 1
     rho1: np.ndarray
     rho0_pdf: np.ndarray    # (nx,) raw pdf samples, integrates to ~1 over R
@@ -35,12 +36,22 @@ class Problem:
     ops: Any | None = None
 
 
-def setup_problem(prob_def: ProblemDef, nt: int, nx: int, L: float = 1.0) -> Problem:
+def setup_problem(prob_def: ProblemDef, nt: int, nx: int, L: float = 1.0,
+                  x_min: float = 0.0) -> Problem:
+    """Grid on [x_min, x_min + L]; x_min=0 reproduces the original [0, L].
+
+    Only the OFFSET is new. The discrete Neumann eigenvalues below depend on nx
+    and dx alone -- the Laplacian is translation-invariant -- so widening the
+    domain changes them through dx and nothing else needs rederiving. A wider
+    domain is what makes the free-space analytical SB usable at large vareps,
+    where on [0,1] the density spreads well past the walls and the no-flux
+    reflection makes the closed form the wrong target.
+    """
     dt = 1.0 / nt
     dx = L / nx
 
-    # Cell-center spatial grid on [0, L].
-    x = np.linspace(0.0, L, nx + 1)
+    # Cell-center spatial grid on [x_min, x_min + L].
+    x = np.linspace(x_min, x_min + L, nx + 1)
     xx = 0.5 * (x[:-1] + x[1:])
 
     rho0_pdf = prob_def.rho0_func(xx)
@@ -56,7 +67,7 @@ def setup_problem(prob_def: ProblemDef, nt: int, nx: int, L: float = 1.0) -> Pro
     lambda_t = ((2.0 - 2.0 * np.cos(np.pi * np.arange(nt) / nt)) / dt**2)[:, None]  # (nt, 1)
 
     return Problem(
-        nt=nt, nx=nx, dt=dt, dx=dx, L=L, xx=xx,
+        nt=nt, nx=nx, dt=dt, dx=dx, L=L, x_min=x_min, xx=xx,
         rho0=rho0, rho1=rho1, rho0_pdf=rho0_pdf, rho1_pdf=rho1_pdf,
         mu0=prob_def.mu0, mu1=prob_def.mu1, sigma=prob_def.sigma,
         name=prob_def.name,
