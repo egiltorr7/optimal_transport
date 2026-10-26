@@ -1,0 +1,148 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{array}
+
+\geometry{margin=1.0in}
+\hypersetup{colorlinks=true, linkcolor=blue!60!black, urlcolor=blue!60!black}
+
+\newcommand{\eps}{\varepsilon}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\dv}{\nabla\cdot}
+\newcommand{\asis}{\textcolor{OliveGreen}{\textbf{as-is}}}
+\newcommand{\ext}[1]{\textcolor{BurntOrange}{\textbf{extension: #1}}}
+\newcommand{\no}{\textcolor{BrickRed}{\textbf{not realistic}}}
+\setlist[itemize]{leftmargin=1.4em, itemsep=2pt}
+
+\title{Which of the collected papers can the 3D solver reproduce?\\
+\large An assessment of the 18 PDFs in \code{Documents/papers/2026/OT\_SB\_examples}}
+\author{Optimal Transport / Schr\"odinger Bridge Project}
+\date{5 October 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Each paper was read against what the solver does today: minimize
+$\int_0^1\!\int_\Omega |m|^2/(2\rho)$ subject to
+$\partial_t\rho+\dv m=\eps\Delta\rho$ with $\eps\ge0$ constant and isotropic,
+two hard marginals of equal mass, no-flux walls on $[0,1]^3$, uniform grid with
+$n_t=n_x=n_y=n_z\le 96$ in double precision ($112$ in \code{mixedc}). Verdicts
+are \asis, \ext{named}, or \no. Section~\ref{sec:summary} has the table and the
+recommended order; Section~\ref{sec:units} the unit conversions that matter;
+Sections~\ref{sec:asis}--\ref{sec:no} the per-paper detail. The readers worked
+from extracted text (no page renderer on this machine), so numbers that exist
+only inside plots are marked as such.
+\end{abstract}
+
+\section{Summary}
+\label{sec:summary}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{4.2cm}p{1.6cm}p{3.0cm}p{5.6cm}@{}}
+\toprule
+Paper & $\eps$ & Verdict & What we would compare against \\
+\midrule
+Haber, Rehman, Tannenbaum 2010 (SISC) & $0$ & \asis & Table 1: $\infty$-norm map error $1.2$e$-2$, $3.8$e$-3$, $9.0$e$-4$, $2.2$e$-5$, $5.1$e$-6$ at $8^3\ldots128^3$; 36 projection iterations, mesh-independent \\
+ur Rehman et al.\ 2009 (MedIA) & $0$ & \asis & Fig.~4 $O(h^2)$ map error; 15 min at $128^3$ on a 2008 GPU \\
+Lavenant et al.\ 2024 / Chizat et al.\ 2022, synthetic tristable SDE & $\sigma^2\Delta t/2$, physical & \asis & Lagrangian ground truth from $10^5$ particles; hold-one-out $W_2$ at the midpoint \\
+Chen, Elkin, Tannenbaum 2023 (rOMT), Gaussian spheres & $3$e$-6$ (tiny) & \asis & Public $50^3$ data; closed-form translating diffusing Gaussian; their MSE $0.141$ needs the free endpoint \\
+Chen, Georgiou, Pavon 2016, Brownian prior $A=0$, $B=I$ & $s^2/2$ & \asis & Closed-form $\Sigma(t)$ from Prop.~4 (same family as Bunne 2023) \\
+Aurell et al.\ 2011, optical trap & $0$ & \asis & $W_{\rm diss}=\tau W_2^2/\Delta t$ with the closed form (24); SB with $\eps>0$ is a different problem \\
+Reich 2019, drift-free random walk (Ex.~2.5 in 3D) & $\gamma/2$ & \asis & Exact Schr\"odinger kernels of a Gaussian-mixture ensemble; constructed, not in the paper \\
+\midrule
+Brenier et al.\ 2003 / L\'evy et al.\ 2021 (cosmology) & $0$ & \ext{periodic BC or padded sub-box, density floor} & $P(k)$ of reconstructed ICs within 5\% for $k<0.15\,h/$Mpc; 62\% of particles within one $6.25\,h^{-1}$Mpc mesh; BAO peak to 0.4\% \\
+Chen, Georgiou, Pavon 2018 Part III & $\eps/2$ & \ext{potential term $\int V\rho$} & Closed-form Gaussian bridge with harmonic running cost \\
+Chen, Benveniste, Tannenbaum 2024 (urOMT) & $3$e$-6$ & \ext{unbalanced source + Fisher--Rao} & Public Zenodo data; NMSE / PCTM curves (plots only) \\
+Reich 2019, Lorenz-63 (Ex.~5.3) & $\gamma/2=0.05$, physical & \ext{prescribed drift $f(z)$ in the constraint} & Sinkhorn solution of the same single cycle; no numbers in the paper \\
+Holdijk et al.\ 2023 (transition paths) & $k_BT/(m\gamma)$, derived & \ext{potential term, periodic, basin marginals} & Nothing density-level in the paper; qualitative saddle crossing \\
+Elkin 2018, Koundal 2020, Ratner 2017 & $\le 3$e$-6$ & \ext{free-endpoint fidelity term} & Private data, non-cubic grids, no numbers to match \\
+\midrule
+Nikakhtar et al.\ 2022 (BAO, semi-discrete) & $0$ & \no & Halo-level Laguerre barycentres at 1~Gpc \\
+Hartmann, Sch\"utte 2012 & $0.5$ & \no & Hitting-time control, Dirichlet target set, no second marginal \\
+CGP 2016/2018 own examples & -- & \no & Degenerate anisotropic noise in phase space \\
+gWOT / mean-field Langevin proper & -- & \no & Multi-marginal with soft data fitting in 10-d PCA \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Recommended order.}
+\begin{enumerate}[leftmargin=1.8em, itemsep=3pt]
+  \item \textbf{Haber--Rehman--Tannenbaum synthetic Monge--Amp\`ere test} ($\eps=0$). Only quantitative 3D benchmark with a printed error table and a timing. Needs one post-processing step: extract the map from the dual potential (or integrate $v=m/\rho$) and a floor on zero intensities.
+  \item \textbf{Cosmological reconstruction on AbacusCosmos} ($\eps=0$). Real public data with initial conditions and particle IDs; the Benamou--Brenier interpolant $\rho(t)$ at $t=D(z{=}49)/D(z{=}0.3)$ \emph{is} their reconstruction, so no particle tracking is needed. Periodic boundaries are a small change to the projection (DCT modes become FFT modes); the padded sub-box works today.
+  \item \textbf{Tristable SDE of Lavenant et al.\ Sec.~4.1 in 3D} ($\eps$ physical). The one problem in the folder where the Brownian reference, two time points and a known $\sigma^2$ make our equation exactly their model, with a Lagrangian ground truth to score against.
+  \item \textbf{Brownian-prior Gaussian steering} (CGP Part I with $A=0$, $B=I$) as a closed-form verification, and \textbf{the rOMT Gaussian spheres} (public) as the link to the glymphatic literature.
+  \item If one extension is to be built, make it the \textbf{prescribed drift} $\partial_t\rho+\dv(\rho f)+\dv m=\eps\Delta\rho$: it unlocks Lorenz-63 data assimilation (the most convincing physical-$\eps$ example), a fixed-horizon cousin of Hartmann--Sch\"utte, and the molecular transition-path bridge. The potential-term extension (linear in $\rho$, changes only the prox) is cheaper and covers CGP Part III and, via Girsanov, gradient drifts.
+\end{enumerate}
+
+\paragraph{The honest finding on ``$\eps$ really needed''.} Of the applications collected, only the trajectory-inference model and Lorenz-63 assimilation use a diffusion that is both physical and resolved on the grid. In the glymphatic papers $\sigma^2=0.002$ in voxel units gives $\eps\approx3\times10^{-6}$ on our unit box, a regularizer rather than a resolved diffusivity. In Aurell et al.\ the diffusion cancels: the minimum-dissipation protocol is the deterministic displacement interpolation, and an $\eps>0$ bridge there answers the variance question they only mention. In cosmology nobody gives $\eps>0$ a meaning; the one hook is Brenier et al.'s remark that multistream regions have lost their inner velocity structure.
+
+\section{Unit conversions}
+\label{sec:units}
+Every paper writes the diffusion differently. With physical domain side $L$, horizon $T$, and our equation $\partial_t\rho+\dv m=\eps\Delta\rho$ on $[0,1]^3\times[0,1]$:
+\begin{itemize}
+  \item Langevin $dX=\sigma\,dB$ (Lavenant, Chizat, Bunne): FP has $\tfrac{\sigma^2}{2}\Delta\rho$, so $\eps=\sigma^2T/(2L^2)$.
+  \item Reich $dZ=f\,dt+\gamma^{1/2}dW$: $\eps=\gamma T/(2L^2)$.
+  \item CGP $dx=u\,dt+dw$ with $B=I$: $\eps=T/(2L^2)$; rescaling the Gaussians to width $s$ gives $\eps=s^2/2$.
+  \item rOMT $\partial_t\rho+\dv(\rho v)=\sigma\Delta\rho$ (Chen 2023/2024, $\sigma=0.002$, $T=m\,k_t=4$, $L=50$ voxels): $\eps=\sigma T/L^2=3.2\times10^{-6}$.
+  \item Entropic OT with $\int\tfrac12|x-y|^2d\gamma+\epsilon_{\rm OT}H(\gamma)$: $\epsilon_{\rm OT}=\sigma^2\Delta t$, so $\eps=\epsilon_{\rm OT}/(2L^2)$.
+\end{itemize}
+
+\section{Reproducible as-is}
+\label{sec:asis}
+
+\subsection{Haber, Rehman, Tannenbaum, SIAM J.\ Sci.\ Comput.\ 32 (2010); ur Rehman et al., Med.\ Image Anal.\ 13 (2009)}
+Problem: $\min\tfrac12\int\mu_0|u-x|^2$ s.t.\ $\det(\nabla u)\,\mu_1(u)=\mu_0$ (eq.~1.1, p.~198), i.e.\ $\tfrac12W_2^2$, our $\eps=0$ objective. Intensities are mass; both volumes divided by their sums; a small positive value added where the intensity is zero (value not stated); Dirichlet Laplacian in the inner solves. Synthetic test (both papers): $\mu_1$ = a brain MRI (2009: the built-in MATLAB \code{mri} volume, $128\times128\times27$), $u=\nabla\varphi$ with $\varphi=\tfrac12|x|^2+c\prod_i e^{-(x_i-1/2)^2/2\sigma_i^2}$ ($c,\sigma_i$ not stated), $\mu_0=\det(\nabla u)\mu_1(u)$; 2010 extends a 2D bump symmetrically in $z$, which lets our 3D run be checked slice-by-slice against the 2D solver. Targets: 2010 Table~1 (3D $\infty$-norm map error at $h=2^{-3}\ldots2^{-7}$: $1.2$e$-2$, $3.8$e$-3$, $9.0$e$-4$, $2.2$e$-5$, $5.1$e$-6$) and Table~2 (projection iterations 67, 46, 34, 35, 36); 2009 Fig.~4 $O(h^2)$ and ``15 minutes at $128^3$'' on a GeForce 8800. Neither reports the transport cost. The real pre-/intra-operative brain pair at $256^3$ is private and too large: \no.
+
+\subsection{Lavenant, Zhang, Kim, Schiebinger, Ann.\ Appl.\ Probab.\ 34 (2024); Chizat, Zhang, Heitz, Schiebinger, NeurIPS 2022}
+Model: $dX=-\nabla\Psi\,dt+\sigma\,dB$ with reflection on a box (Chizat eq.~1) and the reference process is \emph{drift-free} reflected Brownian motion (Lavenant p.~433, 440). Between two consecutive snapshots the estimator is the entropic OT with $\epsilon=\sigma^2\Delta t$ and the Neumann heat kernel (Lavenant eq.~1.6, App.~C; Chizat Thm.~3.1 and eq.~6), so the marginal path is exactly $\partial_t\rho+\dv m=\tfrac{\sigma^2}{2}\Delta\rho$ with no-flux walls. The synthetic tristable landscape of Lavenant Sec.~4.1 ($\Psi=4\|x-x_0\|^2\|x-x_1\|^2\|x-x_2\|^2$ with the three wells in the $(x_1,x_2)$ plane, $X_0\sim0.15\,N(0,I)$, $\sigma^2=0.25$, horizon $0.4$) is 4-d only by padding: dropping $x_4$ gives a 3D problem unchanged in substance. Minimum experiment: simulate $\ge10^5$ particles, KDE two snapshots $t_i$, $t_{i+2}$ onto $96^3$, solve the bridge with $\eps=\sigma^2\Delta t/(2L^2)$, compare the $t=\tfrac12$ interpolant with the true $\rho_{t_{i+1}}$ in $W_2$ (their hold-one-out validation, p.~475). A larger gap raises $\eps$ into a regime where the diffusion is visible. Known growth can be folded into one pair by dividing $\rho_1$ by $g_i$ (hard constraint 3.7). The real data (iPSC reprogramming, 10-d PCA, soft multi-marginal fit) are \no; a 3-PCA gridding would not be their model.
+
+\subsection{Chen, Tran, Elkin, Benveniste, Tannenbaum, J.\ Sci.\ Comput.\ 97 (2023)}
+Stated model (eqs.~1--2b): $\inf\int\!\int\rho|v|^2$ s.t.\ $\partial_t\rho+\dv(\rho v)=\sigma\Delta\rho$, equal mass, $\Omega\subseteq\R^3$, explicitly ``equivalent to the Schr\"odinger bridge'' (p.~12). This is ours. Solved numerically in free-endpoint form with $\beta\|\rho(1)-\rho_1^{\rm obs}\|^2$ (eqs.~3--4b) on cell-centred grids, PIC advection + backward-Euler diffusion, Gauss--Newton; Table~1: $m=10$, $k_t=0.4$, $\sigma=0.002$, $\beta=5000$, grids $50^3$ and $56\times106\times51$; run times 3~min / 1.14~h / 3.36~h at $25^3/63^3/88^3$ (12 threads). Public: \url{https://github.com/xinan-nancy-chen/rOMT_spdup} (Gaussian spheres and two rat cases). Synthetic data (eq.~18): $G_i=\tfrac{100}{\sqrt{2\pi}}\exp(-[(x-0.8i)^2+(y-0.8i)^2+(z-0.8i)^2]/2)$ on $50^3$, blurred with std $(i+1)\sqrt{0.2}$ voxels, so the variance growth ($0.2(2i+3)$ voxel$^2$ per pair) is inconsistent with $2\sigma T=0.016$; their optimizer absorbs that through advection and the free endpoint. As-is: the sphere pair with $\eps=3.2$e$-6$, or $\eps=1.6$e$-4$ to match the actual spreading, which is a closed-form translating diffusing Gaussian. Matching their MSE $0.1412\pm0.0577$ needs the free-endpoint term; the rat crops need per-axis grid sizes.
+
+\subsection{Chen, Georgiou, Pavon, IEEE TAC 61 (2016), Brownian-prior case}
+Their examples use a degenerate noise channel in phase space (\no). With $A=0$, $B=I$, $T=1$ the bridge is $\partial_t\rho+\dv(\rho u)=\tfrac12\Delta\rho$ and Prop.~4 (p.~1162) gives $\Sigma(t)^{-1}=P(t)^{-1}+Q(t)^{-1}$ with $Q(t)=Q(0)-tI$, $P(t)=P(0)+tI$, $Q(0)=\Sigma_0^{1/2}\bigl(\Sigma_0+\tfrac12I-(\Sigma_0^{1/2}\Sigma_T\Sigma_0^{1/2}+\tfrac14I)^{1/2}\bigr)^{-1}\Sigma_0^{1/2}$. Scaling the Gaussians to width $s$ gives $\eps=s^2/2$. Minimum experiment: centre $(\tfrac12,\tfrac12,\tfrac12)$, $\Sigma_0=s^2I\to\Sigma_1=s^2I/4$, $s\approx0.1$, compare $\rho(t)$ at $t=\tfrac14,\tfrac12,\tfrac34$; anisotropic $\Sigma_1=s^2{\rm diag}(0.05,1,1)$ mirrors their Fig.~4. Same family as the Bunne et al.\ closed form in the survey.
+
+\subsection{Aurell, Mej\'ia-Monasterio, Muratore-Ginanneschi, PRL 106 (2011)}
+Overdamped Langevin with controllable potential; mean heat eq.~(6); FP eq.~(8). The optimal control $U^\ast=-\psi-\beta^{-1}\ln\rho$ cancels the diffusion exactly and the density follows the deterministic system (14)--(15): Burgers for $\psi$ and continuity for $\rho$, i.e.\ the $W_2$ displacement interpolation. Minimal dissipated work $W_{\rm diss}=\tau W_2^2(\rho_0,\rho_f)/\Delta t$ (eq.~21). Temperature enters only through the entropy difference. Optical-trap example (eqs.~22--24): $U_0=\tfrac12|x|^2$, $U_f=\tfrac12c|x-h|^2$, Gaussian ansatz valid in any dimension, optimum $\mu_{t_f}=c\Delta t\,h/(c\Delta t+2\tau)$, $r=K^2/\Delta t^2$, $K=\sqrt{\Delta t(c\Delta t+2\tau)+\tau^2}-\tau$. As-is with $\eps=0$: our cost is $\tfrac12W_2^2$, so $W_{\rm diss}=2\tau\cdot{\rm cost}/\Delta t$. A 3D $\eps>0$ run is \emph{forced}: it computes the KL / variance-minimizing bridge the paper only mentions (refs.\ 18--19), not minimum heat.
+
+\subsection{Reich, Acta Numerica 28 (2019), random-walk model}
+The Schr\"odinger problem is scenario (C): couple the forecast ensemble $\pi_0$ at $t=0$ to the Bayesian analysis $\hat\pi_1$ at $t=1$ with equal weights (Def.~2.4, eq.~2.13; Lemma~2.25 eq.~2.69), reference $dZ=f\,dt+\gamma^{1/2}dW$, path-space cost $\int\|u\|^2/(2\gamma)$ by Girsanov (eq.~2.34). With $\Psi={\rm id}$ (Example~2.5: 11 particles on $[-1,1]$, $\gamma B=0.1$, $R=0.1$, $y=-0.5$) the kernel is Gaussian and $\hat\pi_1$ is closed form, so a 3D analogue on $[0,1]^3$ is as-is with $\eps=\gamma/2$ and exact Schr\"odinger kernels to compare. It is a constructed example, not an experiment in the paper.
+
+\section{Reproducible with a named extension}
+\label{sec:ext}
+
+\subsection{Brenier et al., MNRAS 346 (2003); L\'evy, Mohayaee, von Hausegger, MNRAS 506 (2021)}
+Both state the Benamou--Brenier action explicitly: Brenier eq.~(51)/(D5), L\'evy eq.~(9), with growth-factor time $\tau\in[0,1]$, $\rho_0\equiv1$ exactly, quadratic cost, $\eps=0$. Every simulation box is periodic; Brenier unwraps by $\pm$box and truncates to a sphere, L\'evy computes periodic Laguerre diagrams; Brenier's Caffarelli--Li remark (p.~505, 507) justifies a finite patch in a uniform background, which is our Neumann sub-box. Data: AbacusCosmos (public, \url{https://lgarrison.github.io/AbacusCosmos/}), $1100\,h^{-1}$Mpc boxes, $1440^3$ particles, snapshots $z=0.3\ldots1.5$, ICs from \code{zeldovich-PLT}; L\'evy paints $256^3$ subsamples on $512^3$ with \code{nbodykit}. Targets: L\'evy Fig.~11, reconstructed $z=49$ power spectrum within 5\% for $k\lesssim0.15\,h/$Mpc; BAO peak $\delta r_s=0.02\pm0.37\%$ over 50 reconstructions (full box only); Brenier Figs.~8--11, 62\% of Lagrangian grid points exact and 75\% within one mesh at $6.25\,h^{-1}$Mpc, 35\% at $3.1$, dropping to 45\% without the periodicity correction. Needed: periodic BC (DFT modes in the projection; the time solve is unchanged) or a $500\,h^{-1}$Mpc sub-box with Neumann padding of one displacement ($\approx10\,h^{-1}$Mpc); a density floor for empty voids at $96^3$ CIC. Resolution caveat: $96^3$ over $1100\,h^{-1}$Mpc gives a Nyquist of $0.27\,h/$Mpc, so only the $k<0.15$ comparison is meaningful. A natural $\eps>0$ experiment: compare $\eps$-smearing with their $2\,h^{-1}$Mpc visualization filter and with BAO damping, but no paper gives it a physical reading.
+
+\subsection{Chen, Georgiou, Pavon, IEEE TAC 2018, Part III}
+Adds a running state cost $\int x'Qx$ (eqs.~1a--c), solved in closed form through the Hamiltonian matrix (Thm.~1). For $A=0$, $B=I$, $Q=qI$ this is our problem plus a potential term $\int\!\int V\rho$ with $V=q|x|^2$, linear in $\rho$ and therefore only a change to the KE prox. Gives an exact ``bridge with harmonic running cost'' test in 3D. Their own inertial-particle examples: \no.
+
+\subsection{Chen, Benveniste, Tannenbaum, Sci.\ Rep.\ 14 (2024), urOMT}
+Constraint $\partial_t\rho+\dv(\rho v)=\sigma\Delta\rho+\chi\rho r$ with Fisher--Rao cost $\alpha\chi r^2\rho$ (eqs.~3a--c), Neumann via ghost points, free endpoint. Table~1: $50^3$ and $56\times106\times51$, $\sigma=0.002$, $\alpha=9000/10000$, $\beta=5000/50$; run times 3~h~20~min (5 spheres), 8~h~50~min (rat), 3 CPUs. Data public: \url{https://github.com/xinan-nancy-chen/urOMT}, Zenodo 10.5281/zenodo.7839019. Needs the unbalanced source term; without it the mass renormalization removes exactly the effect they demonstrate.
+
+\subsection{Reich 2019, Lorenz-63 (Example 5.3)}
+$dZ=f(Z)dt+\gamma^{1/2}dW$, $\gamma=0.1$, fully observed with $R=0.1$, $\Delta t=0.01$ over $t\in[0,40\,000]$; Fig.~5.1 RMSE vs ensemble size (plot only). A single assimilation cycle is a 3D bridge with physical $\eps=\gamma/2=0.05$ in model units on the box containing the attractor, but the reference carries the Lorenz drift, which must enter the constraint as $\dv(\rho f)$; the projection is then no longer a pure DCT problem and the drift has to be split off (operator splitting, or absorbed into the LADMM constraint step). Use an observation interval of $0.1$--$0.5$, not the $0.01$ step, or $\eps$ on the box degenerates to $10^{-6}$. The sequential RMSE curves cannot be reproduced by grid bridges.
+
+\subsection{Holdijk et al., NeurIPS 2023}
+Underdamped Langevin in full Cartesian coordinates with the force field as drift, $T=300$~K, $\gamma=1\,$ps$^{-1}$ (App.~C.1); Thm.~3.1 identifies the biased transition-path problem as a Schr\"odinger bridge with Dirac marginals replaced by a smoothed terminal cost; solved by sampling and a neural policy; Table~1 reports path-level metrics (EPD, THP, ETP) that have no density counterpart. A collective-variable bridge needs: an overdamped reference with $\eps=k_BT/(m\gamma)$ (derived, not stated), the free-energy gradient as drift (by Girsanov equivalent to the Brownian prior plus the potential $|\nabla F|^2/2-\eps\Delta F$), periodic boundaries for dihedrals, and basin Gaussians as marginals; the 3-CV polyproline free energy is not provided. This would be a new experiment rather than a reproduction.
+
+\subsection{Elkin et al.\ 2018; Koundal et al.\ 2020; Ratner et al.\ 2017}
+Ratner: classical balanced Benamou--Brenier, $\eps=0$ (eqs.~4--6), equal mass by normalization; qualitative pathway figures only; data private. Elkin (eq.~1, 3): $\partial_t\rho+\dv(\rho v)=\sigma^2\Delta\rho$ with a free endpoint $\alpha\|\rho(T)-\rho_T^{\rm obs}\|^2$; $\sigma$ reported as $0.002$ with an ambiguous square. Koundal (eqs.~1--3): the stated problem is exactly our balanced bridge with $\eps=\sigma^2$, identified with the Schr\"odinger bridge (p.~12); every reported number (pathline volumes $7124\pm605$ vs $5822\pm636$ voxels, speeds $0.10\pm0.026$ vs $0.09\pm0.02$) comes from the free-endpoint variant plus Lagrangian post-processing on unpublished data with unstated grids; 52~h on a cluster for 14 rats. All three need the free-endpoint term to match anything and none has public data.
+
+\section{Not realistic}
+\label{sec:no}
+\begin{itemize}
+  \item \textbf{Nikakhtar, Sheth, L\'evy, Mohayaee, PRL 129 (2022).} Weighted semi-discrete OT to halo centres plus dust on a $1\,h^{-1}$Gpc periodic box, 20 realizations, sub-percent BAO statistics; a $96^3$ Eulerian grid cannot resolve protohalos. A crude mass-weighted-halo analogue is possible but compares to nothing in the paper.
+  \item \textbf{Hartmann, Sch\"utte, J.\ Stat.\ Mech.\ (2012).} Rare-event control to a target set with a Dirichlet boundary and stopping time (eqs.~3.2--3.7); 1D double well, $\eps=0.5$. Not a two-marginal bridge. A fixed-horizon cousin between the two wells would need the drift extension and has no counterpart in the paper.
+  \item \textbf{CGP 2016/2018 own examples.} Inertial particles with noise only in velocity ($B=[0;1]$) in unbounded phase space: degenerate anisotropic diffusion breaks the isotropic projection.
+  \item \textbf{gWOT and mean-field Langevin proper.} Fifty soft marginals, growth, 10-d PCA, particle methods.
+\end{itemize}
+
+\end{document}

@@ -4,11 +4,11 @@ isotropic 3D Gaussians and compare against the closed-form reference.
 Runs on JAX; call jax_config.configure() first to pick CPU/GPU and precision
 (see that module's docstring for why x64=True matters for this comparison).
 
-Memory note -- the new constraint in 3D. Every working array is
-(nt, nx, ny, nz) and the projection holds ~8 of them live, so float64 peak
-memory is roughly 64 * nt*nx*ny*nz bytes: ~64 MB at 16^4, ~1 GB at 32^4,
-~17 GB at 64^4. The defaults below stay well inside a laptop; see
-setup/projection_3d.py's module docstring before pushing the resolution up.
+Defaults: ETD scheme, DCT-in-t mode solver, matmul DCT, compiled loop with
+50 iterations per chunk, float64. --precision mixedc is the float32-storage
+mode that matches float64 (setup/precision.py). Memory: about 55 arrays of
+nt*nx*ny*nz entries in the mixed modes, 80 in float64 (docs/gpu_mixed_precision_2d.tex,
+Sections 5 and 8): 64^4 is ~7-11 GB, 96^4 ~37-54 GB, 112^4 fits one GH200 only in mixedc.
 """
 import argparse
 import sys
@@ -31,9 +31,22 @@ def main():
     ap.add_argument("--max-iter", type=int, default=40_000)
     ap.add_argument("--device", default="auto", choices=["auto", "cpu", "gpu", "tpu"])
     ap.add_argument("--x64", default=True, action=argparse.BooleanOptionalAction)
+    ap.add_argument("--scheme", default="etd", choices=["cn", "etd"])
+    ap.add_argument("--modes", default="dct", choices=["thomas", "dct"], help="per-mode time solver")
+    ap.add_argument("--dct", default="matmul", choices=["fft2n", "fftn", "matmul"], help="DCT kernel")
+    ap.add_argument("--jit", default=True, action=argparse.BooleanOptionalAction)
+    ap.add_argument("--check-every", type=int, default=50, help="iterations per compiled chunk")
+    ap.add_argument("--diag", default="full", choices=["full", "stopping"])
+    ap.add_argument("--precision", default="fp64", choices=["fp64", "fp32", "mixed", "mixedm", "mixedc"],
+                    help="see setup/precision.py; mixedc is the one that matches fp64")
     args = ap.parse_args()
 
+    # x64 stays on for every mode but fp32 (setup, precompute and references
+    # are built in float64; the mixed modes need float64 to exist).
     jax_config.configure(device=args.device, x64=args.x64)
+    import jax
+    if args.precision != "fp64":
+        jax.config.update("jax_default_matmul_precision", "highest")
 
     import matplotlib
 
@@ -43,9 +56,12 @@ def main():
 
     from setup.grid_3d import setup_problem_3d
     from setup.operators_3d import build_operators_3d
+    from setup import projection_3d as P3
     from setup.pipeline_3d import LadmmConfig, discretize_then_optimize_3d
+    from setup.precision import configure_precision
     from setup.problems_3d import analytical_sb_gaussian_3d, prob_gaussian_3d
     from setup.projection_3d import precomp_banded_proj_3d, proj_fokker_planck_banded_3d
+    from setup.projection_expsemi_3d import precomp_expsemi_proj_3d, proj_fokker_planck_expsemi_3d
 
     nt, nx, ny, nz = args.nt, args.nx, args.ny, args.nz
     vareps = args.eps
@@ -53,23 +69,39 @@ def main():
     problem = setup_problem_3d(prob_gaussian_3d(sigma=args.sigma), nt=nt, nx=nx, ny=ny, nz=nz)
     problem.ops = build_operators_3d(problem)
 
-    bp = precomp_banded_proj_3d(problem, vareps)
+    P3.set_dct_method(args.dct)
+    if args.scheme == "cn":
+        bp, proj = precomp_banded_proj_3d(problem, vareps, method=args.modes), proj_fokker_planck_banded_3d
+    else:
+        bp, proj = precomp_expsemi_proj_3d(problem, vareps, method=args.modes), proj_fokker_planck_expsemi_3d
+    # the float64 problem stays in scope for the reference; `problem_solve`
+    # is what the pipeline sees (float32 in the reduced-precision modes)
+    problem_solve, bp, proj, prec_kw = configure_precision(args.precision, problem, bp, proj, build_operators_3d)
+    if args.precision == "fp32":
+        jax.config.update("jax_enable_x64", False)
     ladmm_cfg = LadmmConfig(
         gamma=args.gamma, tau=args.gamma * (101.0 / 100.0),
         max_iter=args.max_iter, eps_abs=1e-10, eps_rel=1e-8,
+        jit=args.jit, check_every=args.check_every, diag_level=args.diag, **prec_kw,
     )
 
     n_cells = nt * nx * ny * nz
     print(
         f"Running SB Gaussian 3D: nt={nt} nx={nx} ny={ny} nz={nz} "
         f"({n_cells:,} cells, ~{n_cells * 8 / 2**20:.1f} MB per float64 array) "
-        f"gamma={ladmm_cfg.gamma:g} tau={ladmm_cfg.tau:g} eps={vareps:g} sigma={args.sigma:g} ..."
+        f"gamma={ladmm_cfg.gamma:g} tau={ladmm_cfg.tau:g} eps={vareps:g} sigma={args.sigma:g} "
+        f"scheme={args.scheme} modes={args.modes} dct={args.dct} jit={args.jit} precision={args.precision} ..."
     )
-    result = discretize_then_optimize_3d(problem, proj_fokker_planck_banded_3d, bp, vareps, ladmm_cfg)
+    result = discretize_then_optimize_3d(problem_solve, proj, bp, vareps, ladmm_cfg)
+    jax.block_until_ready(result.rho_stag)
+    jax.config.update("jax_enable_x64", True)
     info = result.info
+    steady = (info.walltime - info.walltime_first_chunk) / max(info.iters - args.check_every, 1) if args.jit \
+        else info.walltime / info.iters
     print(
         f"iters={info.iters} converged={info.converged} walltime={info.walltime:.2f}s "
-        f"({info.walltime / info.iters * 1000:.3f} ms/iter)"
+        f"({steady * 1000:.3f} ms/iter steady state, compile {info.walltime_first_chunk:.1f}s, "
+        f"dtype x={result.rho_stag.dtype} y={result.rho_cc.dtype})"
     )
 
     rho_ana, mx_ana, my_ana, mz_ana = analytical_sb_gaussian_3d(problem, vareps)

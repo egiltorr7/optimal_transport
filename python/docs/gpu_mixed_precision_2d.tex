@@ -413,17 +413,31 @@ the iteration would be communication-bound. The engineering cost is moderate (th
 sharding annotations and one transpose in the projection) and should come after the
 3D code has the single-GPU path of Sections \ref{sec:jit}--\ref{sec:proj}.
 
-\section{What carries to 3D}\label{sec:3d}
+\section{The 3D port}\label{sec:3d}
 
-The 3D tree (\code{python/3d}) still has the eager, list-based Thomas sweep and no
-compiled path. In order: register the 3D state and precompute as pytrees; port
-\code{ladmm\_jit.py} unchanged (it is grid-agnostic); write the 3D DCT as three
-\code{tensordot} calls and the DCT-in-$t$ mode solver with the same Woodbury correction
-(only $\lambda_{xy}\to\lambda_{xyz}$ changes); build all zero planes and initial iterates
-in \code{problem.rho0.dtype}; then enable \code{mixedc}. Per array, $n^4\times 8$ bytes;
-with $\sim$55 array-equivalents (four state components) the single-GPU limit on a 98 GB
-GH200 is $112^4$ in \code{mixedc} and $96^4$ in float64; $128^3$ in space fits with
-$n_t=64$ or after dropping the references and the unused carry entries.
+Everything above is now in \code{python/3d} (September 30, 2026): the 3D state and
+precompute dataclasses are pytrees; \code{ladmm\_jit.py} is the 2D file unchanged (it is
+grid-agnostic); \code{projection\_3d.py} has the scan-based Thomas sweep, the three DCT
+kernels and the DCT-in-$t$ mode solver, rank-agnostic in the spatial dimensions so the
+Woodbury correction needed no new derivation, only $\lambda_{xy}\to\lambda_{xyz}$;
+\code{projection\_expsemi\_3d.py} is the ETD projection; the pipeline and operators build
+every array in \code{problem.rho0.dtype}; \code{precision.py} carries the modes of Section
+\ref{sec:precision} plus a one-call \code{configure\_precision}. Checks
+(\code{scripts/validate\_gpu\_3d.py}, CPU, $8^4$): the three DCT kernels agree with SciPy to
+$10^{-14}$; the DCT-in-$t$ solver equals the Thomas sweep to $10^{-15}$ for CN and ETD;
+ETD equals CN at $\eps=0$; the ETD projection is feasible and idempotent to $10^{-15}$;
+the compiled loop reproduces the eager one to $10^{-15}$ for \code{check\_every} 1 and 20;
+\code{mixedc} sits $1.7\times10^{-7}$ from float64 after 400 iterations with float64-level
+mass conservation, against $10^{-6}$ for the other reduced-precision modes.
+
+Nothing has been timed on the GPU yet; \code{scripts/bench\_3d.py} is the 3D port of
+\code{bench\_2d.py} for that. Sizing from Section \ref{sec:memory}: per array
+$n^4\times 8$ bytes; with $\sim$55 array-equivalents (four state components) in
+\code{mixedc} and $\sim$80 in float64, one 98 GB GH200 holds $112^4$ in \code{mixedc} and
+$96^4$ in float64; $128^3$ in space fits with $n_t=64$, or after dropping the references
+and the unused carry entries, or on the four GPUs of a node (Section \ref{sec:node}).
+Still missing relative to 2D: the clustered (non-uniform) time grid, and a suite runner
+with references for the 3D Gaussian study.
 
 \begin{thebibliography}{9}
 \bibitem{jaxdocs} JAX documentation: \emph{How to think in JAX}, \emph{JAX -- The Sharp
